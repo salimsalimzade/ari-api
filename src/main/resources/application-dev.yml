@@ -1,0 +1,8 @@
+spring:
+  config:
+    # Local values and secrets from the git-ignored .env (see .env.example)
+    import: optional:file:.env[.properties]
+
+logging:
+  level:
+    app.ari.api: DEBUG

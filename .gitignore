@@ -1,0 +1,25 @@
+# Gradle
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IntelliJ IDEA
+.idea/
+*.iml
+*.ipr
+*.iws
+out/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+
+# Environment (local values and secrets; .env.example is the committed template)
+.env
+.env.*
+!.env.example
+
+# Claude Code (local, per-user settings only)
+.claude/settings.local.json

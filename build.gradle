@@ -1,0 +1,76 @@
+plugins {
+  id 'java'
+  id 'org.springframework.boot' version '4.1.1'
+  id 'io.spring.dependency-management' version '1.1.7'
+  id 'com.diffplug.spotless' version '8.10.3'
+  id 'net.ltgt.errorprone' version '5.1.1'
+}
+
+group = 'app.ari'
+version = '0.0.1-SNAPSHOT'
+description = 'Ari backend: saves highlights and clipped page sections with their sources'
+
+java {
+  toolchain {
+    languageVersion = JavaLanguageVersion.of(25)
+    vendor = JvmVendorSpec.GRAAL_VM
+  }
+}
+
+repositories {
+  mavenCentral()
+}
+
+ext {
+  springdocVersion = '3.1.1'
+  mapstructVersion = '1.6.3'
+  archunitVersion = '1.5.1'
+  errorproneVersion = '2.50.0'
+  googleJavaFormatVersion = '1.36.1' // 1.37.0 breaks Spotless 8.10.3 (Style enum -> record)
+}
+
+dependencies {
+  implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+  implementation 'org.springframework.boot:spring-boot-starter-validation'
+  implementation 'org.springframework.boot:spring-boot-starter-actuator'
+  implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
+  implementation "org.mapstruct:mapstruct:${mapstructVersion}"
+  annotationProcessor "org.mapstruct:mapstruct-processor:${mapstructVersion}"
+
+  errorprone "com.google.errorprone:error_prone_core:${errorproneVersion}"
+
+  testImplementation 'org.springframework.boot:spring-boot-starter-test'
+  testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+  testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
+  testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
+spotless {
+  java {
+    target 'src/**/*.java'
+    googleJavaFormat(googleJavaFormatVersion)
+    removeUnusedImports()
+    forbidWildcardImports()
+    formatAnnotations()
+  }
+}
+
+tasks.withType(JavaCompile).configureEach {
+  options.compilerArgs += [
+    '-Amapstruct.defaultComponentModel=spring',
+    '-Amapstruct.unmappedTargetPolicy=ERROR',
+  ]
+  options.errorprone {
+    disableWarningsInGeneratedCode = true // skip MapStruct output
+    excludedPaths = '.*/build/generated/.*'
+    error 'UnusedVariable', 'UnusedMethod', 'MissingOverride', 'ReferenceEquality', 'DefaultCharset'
+  }
+}
+
+tasks.named('test') {
+  useJUnitPlatform()
+}
+
+tasks.named('bootRun') {
+  systemProperty 'spring.profiles.active', 'dev'
+}

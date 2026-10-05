@@ -1,0 +1,13 @@
+# Git hooks. Install Lefthook once, then run `lefthook install` after cloning.
+# Keep these checks in sync with .github/workflows/ci.yml.
+pre-commit:
+  commands:
+    format:
+      glob: "*.java"
+      run: ./gradlew spotlessApply --quiet
+      stage_fixed: true
+
+pre-push:
+  commands:
+    check:
+      run: ./gradlew spotlessCheck test --quiet
