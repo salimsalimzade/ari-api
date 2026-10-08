@@ -1,8 +1,7 @@
 # Ari sequences
 
-Last updated 2026-10-08. Keep this file identical in both repos. The server's sign-in rules and
-error codes are in ari-api's
-[`docs/architecture.md`](https://github.com/salimsalimzade/ari-api/blob/main/docs/architecture.md);
+Last updated 2026-10-08. The `ari` repo keeps its own copy with only the client side; this one also
+shows the server steps. The sign-in rules and error codes are in [architecture.md](architecture.md);
 the tables are in [database.md](database.md).
 
 1. [Register or sign in (F1)](#1-register-or-sign-in-f1)
@@ -57,7 +56,7 @@ sequenceDiagram
     W->>W: Keep the new cookies in event.locals for this render
     W-->>B: HTML rendered with the new token + the same Set-Cookie headers
   end
-  Note over B,A: Refresh fails: 401, and the user goes to /login.<br/>A replaced token used again within 10 s gets a new pair. Later, it revokes its whole family.
+  Note over B,A: Refresh fails: 401, both cookies are cleared, and the user goes to /login.<br/>A replaced token used again within 10 s gets a new pair while its session is alive. Later, it revokes the whole session.
 ```
 
 - In the browser, several 401s at once share one refresh request.
@@ -72,16 +71,30 @@ sequenceDiagram
   participant A as ari-api
   participant G as Google
   B->>A: GET /oauth2/authorization/google (full-page link)
-  A-->>B: 302 to Google (with state)
+  A-->>B: 302 to Google (state kept in a short session)
   B->>G: Sign in and approve
   G-->>B: 302 to /login/oauth2/code/google with a code
-  B->>A: GET /login/oauth2/code/google?code=...
+  B->>A: GET /login/oauth2/code/google?code=...&state=...
   A->>G: Exchange the code
-  G-->>A: sub, verified email, name
-  A->>A: Find by (GOOGLE, sub), or link by verified email, or create user
-  A->>A: Create JWT and refresh token
-  A-->>B: Set-Cookie ari_access, ari_refresh + 302 to http://localhost:3000/library
+  G-->>A: ID token: sub, email, email_verified, name
+  alt Known Google account (GOOGLE, sub)
+    A->>A: Use its user
+  else Verified email that has a user
+    A->>A: Link Google to it. Email never verified: remove the password, end its sessions
+  else Verified email that is new
+    A->>A: Create a user without a password, email verified
+  end
+  alt Accepted
+    A->>A: Create JWT and refresh token, end the handshake session
+    A-->>B: Set-Cookie ari_access, ari_refresh + 302 to http://localhost:3000/library
+  else Refused or failed
+    A-->>B: 302 to http://localhost:3000/login?error=google
+  end
 ```
+
+- Refused: Google hasn't verified the email, or the user already has another Google account.
+  Failed: the user cancelled at Google, or the `state` didn't match.
+- Google is matched by `sub`, so a Google account that changes its email still finds its user.
 
 ## 4. Server-rendered library page (F2)
 

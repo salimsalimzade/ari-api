@@ -6,6 +6,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -28,6 +29,22 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(BadRequestException.class)
   public ProblemDetail handleBadRequest(BadRequestException ex) {
     return problem(HttpStatus.BAD_REQUEST, "BAD_REQUEST", ex.getMessage());
+  }
+
+  @ExceptionHandler(UnauthorizedException.class)
+  public ProblemDetail handleUnauthorized(UnauthorizedException ex) {
+    return problem(HttpStatus.UNAUTHORIZED, ex.getCode(), ex.getMessage());
+  }
+
+  @ExceptionHandler(ConflictException.class)
+  public ProblemDetail handleConflict(ConflictException ex) {
+    return problem(HttpStatus.CONFLICT, ex.getCode(), ex.getMessage());
+  }
+
+  /** Spring Security found no valid token; the security entry point hands the error over here. */
+  @ExceptionHandler(AuthenticationException.class)
+  public ProblemDetail handleAuthentication(AuthenticationException ex) {
+    return problem(HttpStatus.UNAUTHORIZED, "UNAUTHORIZED", "Sign in to continue");
   }
 
   @ExceptionHandler(Exception.class)

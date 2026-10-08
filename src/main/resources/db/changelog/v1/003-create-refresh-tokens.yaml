@@ -1,0 +1,72 @@
+databaseChangeLog:
+  - changeSet:
+      id: 003-create-refresh-tokens
+      author: ari
+      changes:
+        - createTable:
+            tableName: refresh_tokens
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: refresh_tokens_pkey
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: refresh_tokens_user_id_fkey
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: token_hash
+                  type: varchar(64)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: refresh_tokens_token_hash_key
+              - column:
+                  name: family_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+              - column:
+                  name: client
+                  type: varchar(20)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: expires_at
+                  type: timestamptz
+                  constraints:
+                    nullable: false
+              - column:
+                  name: revoked_at
+                  type: timestamptz
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - createIndex:
+            tableName: refresh_tokens
+            indexName: refresh_tokens_user_id_idx
+            columns:
+              - column:
+                  name: user_id
+        - createIndex:
+            tableName: refresh_tokens
+            indexName: refresh_tokens_family_id_idx
+            columns:
+              - column:
+                  name: family_id
+        - sql:
+            sql: >-
+              ALTER TABLE refresh_tokens
+              ADD CONSTRAINT refresh_tokens_client_check CHECK (client IN ('WEB', 'EXTENSION'))
+      rollback:
+        - dropTable:
+            tableName: refresh_tokens

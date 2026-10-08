@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="app.ari.api.feature.account.infrastructure.UserMyBatisRepository">
+
+  <sql id="columns">
+    id, email, password_hash, display_name, plan, saves_count, email_verified_at, created_at,
+    updated_at
+  </sql>
+
+  <select id="findById" resultType="app.ari.api.feature.account.domain.model.User">
+    SELECT <include refid="columns"/> FROM users WHERE id = #{id}
+  </select>
+
+  <select id="findByEmail" resultType="app.ari.api.feature.account.domain.model.User">
+    SELECT <include refid="columns"/> FROM users WHERE email = #{email}
+  </select>
+
+  <!-- The unique email decides: 0 rows inserted means the email is taken. -->
+  <insert id="insert">
+    INSERT INTO users (<include refid="columns"/>)
+    VALUES (#{id}, #{email}, #{passwordHash}, #{displayName}, #{plan}, #{savesCount},
+            #{emailVerifiedAt}, #{createdAt}, #{updatedAt})
+    ON CONFLICT DO NOTHING
+  </insert>
+
+  <update id="update">
+    UPDATE users
+    SET password_hash = #{passwordHash},
+        display_name = #{displayName},
+        plan = #{plan},
+        saves_count = #{savesCount},
+        email_verified_at = #{emailVerifiedAt},
+        updated_at = #{updatedAt}
+    WHERE id = #{id}
+  </update>
+</mapper>

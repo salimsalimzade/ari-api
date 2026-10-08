@@ -1,8 +1,9 @@
 # Ari database
 
-Last updated 2026-10-08. Keep this file identical in both repos. PostgreSQL 18, migrations with
-Liquibase, queries with MyBatis (F8). Until F8, the in-memory repositories hold the same fields.
-The flows that use these tables are in [sequences.md](sequences.md).
+Last updated 2026-10-08. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
+queries with MyBatis. The sign-in tables (`users`, `oauth_accounts`, `refresh_tokens`) exist since
+F1 and F9; every other table arrives with the feature that first uses it. The flows that use these
+tables are in [sequences.md](sequences.md).
 
 ## 1. Tables and relations
 
@@ -126,7 +127,7 @@ All ids are UUIDs created in code. All times are `timestamptz` in UTC, and `crea
 |---|---|
 | `users` | `email varchar(320)` unique, always trimmed and lowercased in code. `password_hash varchar(100)` nullable. `display_name varchar(100)`. `plan varchar(10)` default `FREE`, check `FREE`/`PRO`. `saves_count int` default 0, check `>= 0` |
 | `oauth_accounts` | FK `user_id` → `users.id` on delete cascade. `provider varchar(20)`. `provider_user_id varchar(255)`. Unique `(provider, provider_user_id)` and unique `(user_id, provider)` |
-| `refresh_tokens` | FK `user_id` → `users.id` on delete cascade. `token_hash varchar(64)` unique. `client varchar(20)`, check `WEB`/`EXTENSION`. Indexes on `user_id` and `family_id`. The 10-second reuse grace counts from `revoked_at` |
+| `refresh_tokens` | FK `user_id` → `users.id` on delete cascade. `token_hash varchar(64)` unique. `client varchar(20)`, check `WEB`/`EXTENSION`. Indexes on `user_id` and `family_id`. The 10-second reuse grace counts from `revoked_at` and applies only while the family still has an active token |
 | `folders` | FK `user_id` → `users.id` on delete cascade. `name varchar(100)`, trimmed, unique `(user_id, lower(name))`. A folder's highlight count is a `COUNT(*)`, not a stored column |
 | `highlights` | FK `user_id` → `users.id` on delete cascade. FK `folder_id` → `folders.id` on delete set null. FK `import_id` → `imports.id` on delete set null. `kind varchar(10)`, check `TEXT`/`CLIP`/`FILE`/`IMAGE`. `text` not null (for `CLIP`, a plain-text copy for search). `source_title varchar(500)`, `source_site varchar(255)`, `file_name varchar(255)`, `page_number int` check `> 0`. Index `(user_id, created_at desc, id desc)` for cursor paging, index on `folder_id` |
 | `imports` | FK `user_id` → `users.id` on delete cascade. `file_name varchar(255)`, `content_type varchar(100)`, `storage_key varchar(512)`. `status varchar(12)` default `QUEUED`, check `QUEUED`/`PROCESSING`/`DONE`/`FAILED`. `highlights_count int` default 0. `error_code varchar(50)`. Index `(user_id, created_at desc)` |
@@ -157,12 +158,12 @@ file; add a new one instead.
 
 | File | Feature |
 |---|---|
-| `001-create-users.yaml` | F8 |
-| `002-create-oauth-accounts.yaml` | F8 (used by F9) |
-| `003-create-refresh-tokens.yaml` | F8 |
-| `004-create-folders.yaml` | F8 |
-| `005-create-imports.yaml` | F8 |
-| `006-create-highlights.yaml` | F8 (after `imports`, for its FK) |
+| `001-create-users.yaml` | F1 (done) |
+| `002-create-oauth-accounts.yaml` | F9 (done) |
+| `003-create-refresh-tokens.yaml` | F1 (done) |
+| `004-create-folders.yaml` | F2 |
+| `005-create-imports.yaml` | F2 (`highlights` references it) |
+| `006-create-highlights.yaml` | F2 |
 | `007-add-highlight-search.yaml` | F10 |
 | `008-create-outbox-and-processed-events.yaml` | F11 |
 | `009-create-subscriptions.yaml` | F15 |

@@ -1,0 +1,64 @@
+databaseChangeLog:
+  - changeSet:
+      id: 001-create-users
+      author: ari
+      changes:
+        - createTable:
+            tableName: users
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: users_pkey
+              - column:
+                  name: email
+                  type: varchar(320)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: users_email_key
+              - column:
+                  name: password_hash
+                  type: varchar(100)
+              - column:
+                  name: display_name
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: plan
+                  type: varchar(10)
+                  defaultValue: FREE
+                  constraints:
+                    nullable: false
+              - column:
+                  name: saves_count
+                  type: int
+                  defaultValueNumeric: 0
+                  constraints:
+                    nullable: false
+              - column:
+                  name: email_verified_at
+                  type: timestamptz
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE users
+              ADD CONSTRAINT users_plan_check CHECK (plan IN ('FREE', 'PRO')),
+              ADD CONSTRAINT users_saves_count_check CHECK (saves_count >= 0)
+      rollback:
+        - dropTable:
+            tableName: users

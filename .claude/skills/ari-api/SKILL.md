@@ -1,11 +1,11 @@
 ---
 name: ari-api
-description: Setup guide and roadmap for ari-api, the Java / Spring Boot backend of Ari, a website plus browser extension that saves highlights and clipped page sections with their sources. Use this skill whenever creating, configuring, running or extending anything in the ari-api repository (feature-module architecture, mock endpoints, Gradle with GraalVM, google-java-format with Spotless, Error Prone, Lefthook git hooks, Docker), when choosing packages or folder structure, and when deciding what to build next on the backend, even if the request does not name this skill.
+description: Setup guide and roadmap for ari-api, the Java / Spring Boot backend of Ari, a website plus browser extension that saves highlights and clipped page sections with their sources. Use this skill whenever creating, configuring, running or extending anything in the ari-api repository (feature-module architecture, PostgreSQL with Liquibase and MyBatis, Spring Security sign-in, Gradle with GraalVM, google-java-format with Spotless, Error Prone, Lefthook git hooks, Docker), when choosing packages or folder structure, and when deciding what to build next on the backend, even if the request does not name this skill.
 ---
 
 # ari-api: backend setup guide and roadmap
 
-Last updated 2026-10-04. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
+Last updated 2026-10-08. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
 
 - **ari-api** (this repo): the Java / Spring Boot backend.
 - **ari**: the frontend (SolidStart website now, browser extension later). It calls this API from
@@ -13,10 +13,11 @@ Last updated 2026-10-04. Ari ("arı" means "bee" in Azerbaijani) lives in two re
 
 Write "Ari" in UI text and `ari` in code, package names and URLs; never use the dotless "ı" there.
 
-Phase 1 is a runnable **mock** API with in-memory data, plus automatic formatting, linting and CI
-on GitHub Actions. Do
-not build real features yet: no database, tables or SQL, no auth, queues, storage or billing. Those
-are the TODO list in section 10, with the decisions already made.
+Accounts are real: sign-in with a password or Google (F1, F9), stored in PostgreSQL with Liquibase
+and MyBatis. Every new feature stores its data in PostgreSQL from the start; there is no in-memory
+mode. Formatting, linting and CI run on every change. Not yet: queues, storage, Redis or billing.
+Those are the TODO list in section 10, with the decisions already made. Diagrams and the sign-in
+rules are in `docs/` (`architecture.md`, `sequences.md`, `database.md`).
 
 ## 1. What Ari does (context only)
 
@@ -28,17 +29,18 @@ The finished MVP lets users:
 4. Browse, search, move, delete and export everything as Markdown, organized in folders.
 5. Use it free up to 500 saves, or pay for Pro.
 
-Phase 1 fakes the library and import endpoints with in-memory data, so the frontend can be built
-against a real HTTP API.
+The library and import endpoints in section 5 come next, one feature at a time, each with its own
+tables.
 
 ## 2. Commands that must work
 
 | Command | What happens |
 |---|---|
-| `./gradlew bootRun` | Starts the mock API on http://localhost:8080 |
+| `docker compose up -d postgres` | Starts PostgreSQL 18 on port 5432 for `bootRun` (data kept in the `postgres-data` volume) |
+| `./gradlew bootRun` | Starts the API on http://localhost:8080; Liquibase creates or updates the tables |
 | `./gradlew spotlessApply` | Formats all Java code (Google Java Style) and removes unused imports |
-| `./gradlew check` | Format check + lint (Error Prone runs while compiling) + tests |
-| `docker compose up --build` | Runs the API in a container on port 8080 |
+| `./gradlew check` | Format check + lint (Error Prone runs while compiling) + tests; Docker must be running (Testcontainers) |
+| `docker compose up --build` | Runs PostgreSQL and the API in containers, the API on port 8080 |
 | `lefthook install` | Installs the git hooks; run it once after cloning (section 6) |
 | `cp .env.example .env` | Creates your local, git-ignored config; run it once after cloning (section 4) |
 | GitHub Actions (`ci.yml`) | Runs format check, tests (with Error Prone lint) and build on every pull request and push to `main` (section 6) |
@@ -51,15 +53,20 @@ class `AriApiApplication`.
 
 | Package | Why |
 |---|---|
-| `spring-boot-starter-web` | REST controllers for the mock API |
+| `spring-boot-starter-webmvc` | REST controllers |
 | `spring-boot-starter-validation` | Request validation |
 | `spring-boot-starter-actuator` | `/actuator/health` |
+| `spring-boot-starter-security-oauth2-resource-server` | Spring Security; our JWTs, read from the `ari_access` cookie or a Bearer header |
+| `spring-boot-starter-security-oauth2-client` | Google sign-in |
+| `spring-boot-starter-jdbc`, `mybatis-spring-boot-starter` (4.x for Boot 4), `postgresql` | Database access with SQL in XML mappers |
+| `spring-boot-starter-liquibase` | Creates and updates the tables at startup |
 | `springdoc-openapi-starter-webmvc-ui` (the version line for Boot 4) | Swagger UI and `/v3/api-docs` |
 | `mapstruct` + `mapstruct-processor` | Mapping between domain models and request/response DTOs |
-| `spring-boot-starter-test`, `archunit-junit5` | Tests, plus the architecture rules test |
+| `spring-boot-starter-test`, `spring-boot-starter-security-test`, `archunit-junit5` | Tests, plus the architecture rules test |
+| `spring-boot-testcontainers`, `testcontainers-postgresql` | A real PostgreSQL 18 container for tests |
 | Gradle plugins: `com.diffplug.spotless`, `net.ltgt.errorprone` | Formatting and linting (section 6) |
 
-Not yet (TODO): MyBatis, PostgreSQL driver, Liquibase, Security, AMQP, Redis, S3 SDK.
+Not yet (TODO): AMQP, Redis, S3 SDK.
 
 **JDK:** install GraalVM Community 25 on your machine. On Ubuntu with SDKMAN:
 `sdk install java <latest 25.x>-graalce` (pick the newest one from `sdk list java`). IntelliJ IDEA
@@ -69,8 +76,9 @@ toolchain below requires a GraalVM 25 JDK, so the build never silently runs on a
 ## 4. Architecture and folder structure
 
 **Style:** layered feature modules. Each aggregate is one folder under `feature/` with the same four
-layers: presentation, application, domain, infrastructure. `feature/highlight` is the reference
-module; copy its layout for every new aggregate.
+layers: presentation, application, domain, infrastructure. `feature/account` is the first built
+module and shows every pattern (MyBatis adapters, Liquibase, exceptions, tests); `feature/highlight`
+below is the planned layout to copy for library aggregates.
 
 ```text
 ari-api/
@@ -86,10 +94,11 @@ ari-api/
     │   ├── common/                     # cross-feature shared code
     │   │   ├── client/                 # external clients and message publishers (later)
     │   │   ├── exception/              # base exceptions + GlobalExceptionHandler (Problem Details)
-    │   │   ├── handlers/               # MyBatis TypeHandlers, LocalDateTime stored as UTC (later)
+    │   │   ├── handlers/               # MyBatis TypeHandlers: Instant ↔ timestamptz in UTC, UUID ↔ uuid
+    │   │   ├── validation/             # shared constraints, e.g. @MaxBytes
     │   │   ├── request/ · response/    # shared DTOs: cursor params, PageResponse<T>
     │   │   └── util/                   # small helpers: ids, time
-    │   ├── config/                     # Spring config: OpenAPI, CORS, Clock (later: MyBatis, RabbitMQ, storage)
+    │   ├── config/                     # Spring config: security (JWT, Google), OpenAPI, CORS, Clock (later: RabbitMQ, storage)
     │   └── feature/                    # one folder per aggregate
     │       ├── highlight/              # ← reference module, copy this layout
     │       │   ├── presentation/       # HighlightController (interface + Swagger) + impl/HighlightControllerImpl
@@ -102,18 +111,18 @@ ari-api/
     │       │   │   ├── model/          # Highlight, HighlightKind
     │       │   │   ├── repository/     # HighlightRepository (port)
     │       │   │   └── service/        # HighlightService + impl/HighlightServiceImpl
-    │       │   └── infrastructure/     # InMemoryHighlightRepository (mock adapter with seeded data)
+    │       │   └── infrastructure/     # HighlightMyBatisRepository (@Mapper extending the port)
     │       ├── folder/                 # same layout as highlight
-    │       ├── account/                # same layout; GET /me returns one fixed mock user
+    │       ├── account/                # built: sign-in (password, Google), sessions, GET /me
     │       ├── fileimport/             # same layout; returns a fake finished job ("import" is a Java keyword)
     │       ├── outbox/                 # package-info.java only (TODO 5)
     │       └── util/                   # package-info.java only: storage helpers (TODO 4)
     ├── main/resources/
     │   ├── application.yml · application-dev.yml   # application-prod.yml later
-    │   ├── db/changelog/               # Liquibase (TODO 1): master file + v1/, v2/; never edit applied files
-    │   ├── persistence/                # MyBatis XML mappers (TODO 1), e.g. HighlightMyBatisRepository.xml
+    │   ├── db/changelog/               # Liquibase: master file + v1/ numbered files; never edit applied files
+    │   ├── persistence/                # MyBatis XML mappers, e.g. UserMyBatisRepository.xml
     │   └── templates/                  # email templates (later)
-    └── test/java/app/ari/api/          # mirrors main: ArchitectureTest + controller tests
+    └── test/java/app/ari/api/          # mirrors main: ArchitectureTest + @IntegrationTest classes (support/)
 ```
 
 Request flow: `XControllerImpl` → `XFacade` → `XService` → `XRepository` (port) → adapter in
@@ -124,19 +133,29 @@ Rules:
 - **Presentation:** the `XController` interface holds the request mappings and Swagger annotations
   (`@Tag`, `@Operation`); `impl/XControllerImpl` is the `@RestController` and only calls the facade.
 - **Facade:** orchestrates one use case and maps DTOs with MapStruct. No business rules here.
-- **Service:** business rules. It talks only to the repository ports of its own feature.
-- **Infrastructure:** adapters that implement the ports. In phase 1 these are in-memory
-  repositories (`ConcurrentHashMap`), seeded at startup and reset on restart. No SQL, no tables, no
-  database connection.
-- **Exceptions:** feature exceptions extend the base classes in `common/exception`
-  (`NotFoundException`, `BadRequestException`) and sit in folders by type. `GlobalExceptionHandler`
-  turns them into RFC 9457 Problem Details with a stable `code` (`NOT_FOUND`, `VALIDATION_FAILED`).
+- **Service:** business rules. It talks only to the repository ports of its own feature, and
+  returns `Optional` or `boolean` for "not possible" (email taken, wrong password).
+- **Infrastructure:** adapters that implement the ports. A MyBatis adapter is a `@Mapper` interface
+  that extends the port, with its SQL in `resources/persistence/<Name>.xml`; rows map into the
+  domain records by constructor argument name. Unique keys guard data: inserts use
+  `ON CONFLICT DO NOTHING` and return `false`. Tables come from a Liquibase changeset in the same
+  commit.
+- **Exceptions:** the facade turns "not possible" into feature exceptions, which extend the base
+  classes in `common/exception` (`NotFoundException`, `BadRequestException`,
+  `UnauthorizedException`, `ConflictException`) and sit in folders by type. `GlobalExceptionHandler`
+  turns them into RFC 9457 Problem Details with a stable `code` (`NOT_FOUND`, `VALIDATION_FAILED`,
+  `EMAIL_TAKEN`).
+- **Transactions:** `@Transactional` on facade use cases, so a use case saves all or nothing.
 - **Between features:** call the other feature's facade; never use its domain or infrastructure.
   `ArchitectureTest` (ArchUnit) checks this and the layer directions: presentation → application →
   domain, and infrastructure → domain only.
 - Records for DTOs, constructor injection, an injected `Clock`, UUID ids, all times in UTC.
-- **CORS:** allow the frontend's origin, read from `app.cors.allowed-origins` in `application.yml`,
-  which takes `APP_CORS_ALLOWED_ORIGINS` (comma-separated; default `http://localhost:3000`).
+- **CORS:** allow the frontend's origin with credentials (the sign-in cookies), read from
+  `app.cors.allowed-origins` in `application.yml`, which takes `APP_CORS_ALLOWED_ORIGINS`
+  (comma-separated; default `http://localhost:3000`).
+- **Sign-in:** every endpoint except `/api/v1/auth/**`, health and Swagger needs a signed-in user;
+  read their id from `@AuthenticationPrincipal Jwt` (`jwt.getSubject()`). The cookie, token and
+  Google rules are in `docs/architecture.md`.
 - **Config and secrets:** secrets and values that differ per environment never go in the repo.
   `application.yml` refers to them as `${VAR:default}` placeholders (no default for real
   secrets). Locally they come from the git-ignored `.env`, which the `dev` profile imports
@@ -145,7 +164,7 @@ Rules:
   `KEY=value`, with no quotes and no `export`, so Spring and Compose read it the same way. List
   every key with a safe example value in `.env.example`.
 
-## 5. API contract (phase 1 mock)
+## 5. API contract
 
 Base path `/api/v1`, JSON, times as ISO-8601 in UTC, null fields left out of responses. The
 frontend repo mirrors this contract, so keep `/v3/api-docs` accurate: the frontend will generate
@@ -168,9 +187,14 @@ enum HighlightKind { TEXT, CLIP, FILE, IMAGE }
 enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 ```
 
-| Endpoint | Feature | Mock behavior |
+| Endpoint | Feature | Behavior |
 |---|---|---|
-| `GET /me` | `account` | One fixed user: plan `FREE`, `savesLimit` 500 |
+| `POST /auth/register` `{ email, password, displayName }` | `account` | 201 + `MeResponse` + both cookies; 409 `EMAIL_TAKEN` |
+| `POST /auth/login` `{ email, password }` | `account` | 200 + `MeResponse` + both cookies; 401 `INVALID_CREDENTIALS` |
+| `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears both |
+| `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears both cookies |
+| `GET /me` | `account` | The signed-in user (plan `FREE`, `savesLimit` 500); 401 when signed out |
+| `GET /oauth2/authorization/google` | `account` | Google sign-in (a full-page link, not `fetch`) |
 | `GET /folders` | `folder` | Seeded folders, e.g. "Spring Boot" and "Thesis" |
 | `POST /folders` `{ name }` | `folder` | Adds a folder in memory |
 | `GET /highlights?folderId=&q=&cursor=` | `highlight` | Filters the in-memory list (case-insensitive match on text and title), 50 per page |
@@ -271,7 +295,9 @@ like the hook. `.editorconfig` sets 2-space indentation.
 `.github/workflows/ci.yml` runs the same checks as the hooks on every pull request and every push
 to `main`, as separate steps so a failure shows exactly what broke: format, test, build. Error
 Prone lint runs while `test` compiles, so it needs no step of its own. Keep the workflow free of
-secrets and per-environment values; tests use the `${VAR:default}` defaults in `application.yml`.
+secrets and per-environment values: tests use the `test` profile (`src/test/resources/
+application-test.yml`, fake values only) and start their own PostgreSQL with Testcontainers; GitHub's
+runners have Docker.
 
 ```yaml
 # .github/workflows/ci.yml (use the latest major version of each action)
@@ -321,23 +347,23 @@ jobs:
   images, not JRE-only ones). The build stage runs `./gradlew bootJar`; the runtime stage copies
   the jar and runs it on port 8080. If the wrapper fails with "xargs: command not found", install
   `findutils` in the build stage (`microdnf install -y findutils`).
-- `docker-compose.yml`:
+- `docker-compose.yml`: `postgres` (`postgres:18`, user, password and database from `.env`, data in
+  the `postgres-data` volume mounted at `/var/lib/postgresql`, the path PostgreSQL 18 expects, and a
+  `pg_isready` healthcheck) and `api`, which waits for a healthy `postgres` and reaches it at
+  `jdbc:postgresql://postgres:5432/ari`. For `./gradlew bootRun`, start only the database:
+  `docker compose up -d postgres`.
 
-```yaml
-services:
-  api:
-    build: .
-    ports: ["8080:8080"]
-```
-
-Later, add `postgres`, `redis`, `rabbitmq`, `seaweedfs` and `mailpit` services here as their TODO
-items start.
+Later, add `redis`, `rabbitmq`, `seaweedfs` and `mailpit` services here as their TODO items start.
 
 ## 8. Rules for the AI assistant
 
-- Build only what this file describes. No database, SQL, tables, auth, queues, storage or billing
-  code until the matching TODO item starts.
-- For every new aggregate, copy the layout of `feature/highlight` exactly.
+- Build only what this file describes. No queues, storage, Redis or billing code until the matching
+  TODO item starts.
+- For every new aggregate, copy the layout of `feature/highlight` exactly, and the patterns of
+  `feature/account` (MyBatis adapter, Liquibase changeset, exceptions, `@IntegrationTest`).
+- Tests that need the database use `@IntegrationTest` (`src/test/java/app/ari/api/support`): one
+  shared Spring context on a PostgreSQL container, so give every test its own data (for example a
+  random email).
 - Create folders when their first code arrives. Each feature folder holds only
   `package-info.java` until its issue starts.
 - Any change to an endpoint or response shape must be reflected in `/v3/api-docs` and called out,
@@ -354,10 +380,10 @@ items start.
 
 ## 9. Phase 1 is done when
 
-- `./gradlew bootRun` starts the API; http://localhost:8080/swagger-ui.html lists every mock
-  endpoint, and `/actuator/health` returns UP.
+- `./gradlew bootRun` starts the API; http://localhost:8080/swagger-ui.html lists every endpoint,
+  and `/actuator/health` returns UP.
 - The endpoints in section 5 return the seeded data. Creating a folder and adding or deleting a
-  highlight work until restart.
+  highlight survive a restart.
 - Committing a badly formatted Java file formats it automatically; a push with a wildcard import or
   an unused variable is blocked.
 - `docker compose up --build` serves the same API on port 8080.
@@ -368,16 +394,16 @@ items start.
 
 Do these in order, one at a time:
 
-1. **Database:** PostgreSQL 18 + MyBatis. Each repository port gets a MyBatis adapter in
-   `infrastructure/` (e.g. `HighlightMyBatisRepository`) with its XML mapper in
-   `resources/persistence/HighlightMyBatisRepository.xml`. TypeHandlers in `common/handlers` store
-   `LocalDateTime` as UTC. Migrations with **Liquibase** in `resources/db/changelog/`: a master file
-   plus versioned folders `v1/`, `v2/` with numbered files; never edit an applied file. Keep the
-   in-memory repositories behind a `mock` profile so the frontend can work without a database. Add
-   `postgres` to docker compose. Keep a `users.saves_count` counter for the plan limit.
-2. **Auth:** Spring Security; our own JWT access tokens (15 minutes) plus rotating refresh tokens
-   (httpOnly cookie for the website); Google sign-in through OAuth2 Client; email + password with
-   bcrypt.
+1. **Database (done for accounts):** PostgreSQL 18 + MyBatis + Liquibase, set up with F1. Each
+   repository port gets a MyBatis adapter in `infrastructure/` (e.g. `HighlightMyBatisRepository`)
+   with its XML mapper in `resources/persistence/HighlightMyBatisRepository.xml`. TypeHandlers in
+   `common/handlers` store `Instant` as UTC. Migrations in `resources/db/changelog/`: a master file
+   plus numbered files in `v1/`; never edit an applied file. No in-memory or `mock` mode: the
+   frontend runs PostgreSQL with docker compose. Keep a `users.saves_count` counter for the plan
+   limit. Each library feature adds its own tables (see `docs/database.md`).
+2. **Auth (done, F1 and F9):** Spring Security; our own JWT access tokens (15 minutes) plus rotating
+   refresh tokens (httpOnly cookies for the website); Google sign-in through OAuth2 Client; email +
+   password with bcrypt. Rules in `docs/architecture.md`.
 3. **Search:** Postgres full-text search: a generated `tsvector` column with the `simple` config, an
    IMMUTABLE wrapper around `unaccent`, a GIN index, and `pg_trgm` for short or partial queries.
    Added as a Liquibase changeset.

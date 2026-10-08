@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="app.ari.api.feature.account.infrastructure.RefreshTokenMyBatisRepository">
+
+  <insert id="insert">
+    INSERT INTO refresh_tokens
+      (id, user_id, token_hash, family_id, client, expires_at, revoked_at, created_at)
+    VALUES (#{id}, #{userId}, #{tokenHash}, #{familyId}, #{client}, #{expiresAt}, #{revokedAt},
+            #{createdAt})
+  </insert>
+
+  <select id="findByTokenHash"
+          resultType="app.ari.api.feature.account.domain.model.RefreshToken">
+    SELECT id, user_id, token_hash, family_id, client, expires_at, revoked_at, created_at
+    FROM refresh_tokens
+    WHERE token_hash = #{tokenHash}
+  </select>
+
+  <!-- The row lock makes a parallel refresh wait, then match 0 rows. -->
+  <update id="revoke">
+    UPDATE refresh_tokens SET revoked_at = #{at} WHERE id = #{id} AND revoked_at IS NULL
+  </update>
+
+  <update id="revokeFamily">
+    UPDATE refresh_tokens SET revoked_at = #{at}
+    WHERE family_id = #{familyId} AND revoked_at IS NULL
+  </update>
+
+  <update id="revokeAllForUser">
+    UPDATE refresh_tokens SET revoked_at = #{at}
+    WHERE user_id = #{userId} AND revoked_at IS NULL
+  </update>
+
+  <select id="hasActiveToken" resultType="boolean">
+    SELECT EXISTS (
+      SELECT 1 FROM refresh_tokens
+      WHERE family_id = #{familyId} AND revoked_at IS NULL AND expires_at &gt; #{now}
+    )
+  </select>
+</mapper>

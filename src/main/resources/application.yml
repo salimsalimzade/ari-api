@@ -1,10 +1,32 @@
 spring:
-  application:
-    name: ari-api
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/ari}
+    username: ${DB_USERNAME:ari}
+    password: ${DB_PASSWORD}
 
 server:
   port: ${SERVER_PORT:8080}
 
+mybatis:
+  mapper-locations: classpath:persistence/*.xml
+  type-handlers-package: app.ari.api.common.handlers
+  configuration:
+    # Rows map straight into record constructors: column password_hash -> parameter passwordHash.
+    map-underscore-to-camel-case: true
+    arg-name-based-constructor-auto-mapping: true
+
 app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  # Adds the demo user (demo@example.com / demo1234). Local development only.
+  seed-demo-data: ${APP_SEED_DEMO_DATA:false}
+  auth:
+    jwt-secret: ${APP_JWT_SECRET}
+    cookie-secure: ${APP_COOKIE_SECURE:true}
+    cookie-domain: ${APP_COOKIE_DOMAIN:}
+    # The website; Google sign-in sends the user back here.
+    web-url: ${APP_WEB_URL:http://localhost:3000}
+    # Google sign-in is off while either value is blank.
+    google:
+      client-id: ${GOOGLE_CLIENT_ID:}
+      client-secret: ${GOOGLE_CLIENT_SECRET:}

@@ -23,6 +23,7 @@ repositories {
 
 ext {
   springdocVersion = '3.1.1'
+  mybatisVersion = '4.1.0'
   mapstructVersion = '1.6.3'
   archunitVersion = '1.5.1'
   errorproneVersion = '2.50.0'
@@ -33,14 +34,23 @@ dependencies {
   implementation 'org.springframework.boot:spring-boot-starter-webmvc'
   implementation 'org.springframework.boot:spring-boot-starter-validation'
   implementation 'org.springframework.boot:spring-boot-starter-actuator'
+  implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
+  implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-client'
+  implementation 'org.springframework.boot:spring-boot-starter-jdbc'
+  implementation 'org.springframework.boot:spring-boot-starter-liquibase'
+  implementation "org.mybatis.spring.boot:mybatis-spring-boot-starter:${mybatisVersion}"
   implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
   implementation "org.mapstruct:mapstruct:${mapstructVersion}"
   annotationProcessor "org.mapstruct:mapstruct-processor:${mapstructVersion}"
+  runtimeOnly 'org.postgresql:postgresql'
 
   errorprone "com.google.errorprone:error_prone_core:${errorproneVersion}"
 
   testImplementation 'org.springframework.boot:spring-boot-starter-test'
   testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+  testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
+  testImplementation 'org.springframework.boot:spring-boot-testcontainers'
+  testImplementation 'org.testcontainers:testcontainers-postgresql'
   testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
   testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
