@@ -78,6 +78,7 @@ ari-api/
 ├── lefthook.yml · Dockerfile · docker-compose.yml · .editorconfig · .gitignore
 ├── .env.example                      # committed template; copy to .env (git-ignored)
 ├── .github/workflows/ci.yml          # CI: format → test → build (section 6)
+├── docs/                             # Mermaid diagrams: architecture.md (server), sequences.md, database.md
 ├── .claude/skills/ari-api/SKILL.md     # this file
 └── src/
     ├── main/java/app/ari/api/
