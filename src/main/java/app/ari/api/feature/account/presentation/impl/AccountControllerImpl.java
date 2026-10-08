@@ -8,9 +8,8 @@ import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
 import app.ari.api.feature.account.presentation.AccountController;
 import app.ari.api.feature.account.presentation.cookie.AuthCookies;
-import java.util.UUID;
-
 import jakarta.validation.Valid;
+import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
