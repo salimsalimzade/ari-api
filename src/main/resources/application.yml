@@ -24,9 +24,3 @@ app:
     jwt-secret: ${APP_JWT_SECRET}
     cookie-secure: ${APP_COOKIE_SECURE:true}
     cookie-domain: ${APP_COOKIE_DOMAIN:}
-    # The website; Google sign-in sends the user back here.
-    web-url: ${APP_WEB_URL:http://localhost:3000}
-    # Google sign-in is off while either value is blank.
-    google:
-      client-id: ${GOOGLE_CLIENT_ID:}
-      client-secret: ${GOOGLE_CLIENT_SECRET:}

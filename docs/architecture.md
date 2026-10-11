@@ -24,7 +24,6 @@ flowchart LR
   mq[["RabbitMQ<br/>background jobs"]]
   files[("File storage<br/>S3-compatible")]
   redis[("Redis<br/>one-time codes, rate limits")]
-  google["Google<br/>OAuth sign-in"]
   paddle["Paddle<br/>billing"]
 
   browser -- "pages (HTML + cookies)" --> web
@@ -37,13 +36,12 @@ flowchart LR
   api --> mq
   api --> files
   api --> redis
-  api -- "OAuth2" --> google
 
   classDef later stroke-dasharray: 5 5
   class ext,mq,files,redis,paddle later
 ```
 
-Dashed boxes are later features. Accounts and sessions live in PostgreSQL (F1, F9); the library
+Dashed boxes are later features. Accounts and sessions live in PostgreSQL (F1); the library
 endpoints get their tables when their features are built.
 
 Key decisions:
@@ -51,10 +49,10 @@ Key decisions:
 - `ari-api` is a JSON API with three callers: the `ari` server while it renders pages (it forwards
   the browser's cookies), the browser after hydration (cookies, with CORS allowing the web origin
   and credentials), and the extension (F13, `Authorization: Bearer`).
-- Only `ari-api` talks to PostgreSQL, RabbitMQ, file storage, Redis and Google, and only `ari-api`
+- Only `ari-api` talks to PostgreSQL, RabbitMQ, file storage, Redis, and only `ari-api`
   receives Paddle webhooks. Only the webhook changes a user's plan.
 - Long work runs in the background: file imports go through the outbox, RabbitMQ and a consumer
-  inside `ari-api` ([sequences §6](sequences.md#6-pdf-or-word-import-f11)).
+  inside `ari-api` ([sequences §5](sequences.md#5-pdf-or-word-import-f11)).
 - Local URLs: API `http://localhost:8080`, base path `/api/v1`, web origin `http://localhost:3000`.
   Cookies ignore the port, so the `ari` server receives the cookies `ari-api` sets on `localhost`.
   In production the two apps run on sibling subdomains and the cookies set `Domain` to the shared
@@ -71,9 +69,7 @@ Every value comes from an environment variable (locally from `.env`, see `.env.e
 | `APP_JWT_SECRET` | none (required) | HS256 key for access tokens, at least 32 characters (`openssl rand -base64 48`) |
 | `APP_COOKIE_SECURE` | `true` | `false` only for `http://localhost` |
 | `APP_COOKIE_DOMAIN` | blank | Shared parent domain in production; blank keeps cookies on the API host |
-| `APP_WEB_URL` | `http://localhost:3000` | The website; Google sign-in sends users back there |
 | `APP_SEED_DEMO_DATA` | `false` | Adds `demo@example.com` / `demo1234`; local development and tests only |
-| `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | blank | Google sign-in is off while either is blank |
 
 ## 3. Sign-in rules
 
@@ -89,7 +85,6 @@ Every value comes from an environment variable (locally from `.env`, see `.env.e
 | Stored secrets | Only the SHA-256 hash of a refresh token |
 | Logout | `POST /api/v1/auth/logout` revokes the session and clears both cookies (always 204) |
 | Stale cookies | The sign-in endpoints (`/api/v1/auth/**`) ignore `ari_access`, so an old cookie never blocks signing in |
-| Google | Matched by Google's `sub`. A new email gets a user without a password. An existing email is linked; if it was never verified, its password is removed and its sessions are revoked, because Google just proved who owns it. Refused, back to `/login?error=google`: an email Google hasn't verified, a user who already has another Google account, a cancelled consent or a bad `state` |
 | Extension | Same token rules, but the tokens travel in JSON bodies and `Authorization: Bearer`, never in cookies. Its refresh tokens are stored with `client = EXTENSION` |
 
 ## 4. Error codes
@@ -100,7 +95,7 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 |---|---|---|
 | `VALIDATION_FAILED` | 400 | Bad body, query or upload (file type or size) |
 | `UNAUTHORIZED` | 401 | Missing, expired or invalid token, sign-in code or webhook signature |
-| `INVALID_CREDENTIALS` | 401 | Wrong email or password, or a Google-only user without a password |
+| `INVALID_CREDENTIALS` | 401 | Wrong email or password |
 | `LIMIT_REACHED` | 403 | A Free user already stores 500 highlights |
 | `NOT_FOUND` | 404 | The item does not exist or belongs to another user |
 | `EMAIL_TAKEN` | 409 | Register with an email that is already used |
@@ -108,7 +103,7 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 
 ## 5. How it is built
 
-Work one feature at a time, and give a plan before writing code. `feature/account` (F1, F9) is the
+Work one feature at a time, and give a plan before writing code. `feature/account` (F1) is the
 first real module; copy its patterns.
 
 **Persistence (the pattern for every feature)**
@@ -141,21 +136,6 @@ first real module; copy its patterns.
   `AuthCookies`.
 - `DemoUserSeeder` adds the demo user when `APP_SEED_DEMO_DATA=true`, so production never has one.
 
-**F9 Google sign-in**
-
-- A second filter chain covers only `/oauth2/**` and `/login/oauth2/**`. It may use a short session
-  to remember the OAuth `state`; the API chain stays stateless. Its `oauth2Login` exists only when
-  `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` are set; otherwise those URLs answer 404, so CI and
-  fresh clones need no Google credentials.
-- The client registration is built in code from `CommonOAuth2Provider.GOOGLE` (scopes `openid`,
-  `email`, `profile`), not from Spring Boot's `spring.security.oauth2.client.*` properties, which
-  would fail at startup when blank. In Google Cloud, register the redirect URL
-  `http://localhost:8080/login/oauth2/code/google`.
-- `GoogleSignInSuccessHandler` reads the ID token (`sub`, `email`, `email_verified`, `name`), applies
-  the rules in section 3, sets the same two cookies as a password sign-in, ends the handshake session
-  and redirects to `{APP_WEB_URL}/library`. Every refusal or handshake failure redirects to
-  `{APP_WEB_URL}/login?error=google`.
-
 ### Tests that prove it works
 
 `./gradlew check` runs them against a PostgreSQL 18 container (Testcontainers; Docker must be
@@ -166,7 +146,4 @@ running):
   Bearer header and is 401 without one or after 15 minutes; refresh rotates; a replaced token works
   for 10 seconds and then revokes its session; logout clears the cookies and ends the session; a
   stale cookie doesn't block login; the CORS preflight allows credentials.
-- `GoogleSignInTest`: new, returning, linked (verified and unverified) and refused Google users; the
-  redirect to Google; the success and failure handlers.
-- `AriApiApplicationTests`: Liquibase creates the tables, health is UP, Google is off without
-  credentials. `ArchitectureTest`: the layer rules from SKILL.md.
+- `AriApiApplicationTests`: Liquibase creates the tables, health is UP. `ArchitectureTest`: the layer rules from SKILL.md.

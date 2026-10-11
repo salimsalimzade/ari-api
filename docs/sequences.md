@@ -6,12 +6,11 @@ the tables are in [database.md](database.md).
 
 1. [Register or sign in (F1)](#1-register-or-sign-in-f1)
 2. [Token refresh (F1)](#2-token-refresh-f1)
-3. [Sign in with Google (F9)](#3-sign-in-with-google-f9)
-4. [Server-rendered library page (F2)](#4-server-rendered-library-page-f2)
-5. [Save and delete a highlight, free limit (F3, F4)](#5-save-and-delete-a-highlight-free-limit-f3-f4)
-6. [PDF or Word import (F11)](#6-pdf-or-word-import-f11)
-7. [Save from the extension (F13)](#7-save-from-the-extension-f13)
-8. [Paddle checkout and webhook (F15)](#8-paddle-checkout-and-webhook-f15)
+3. [Server-rendered library page (F2)](#3-server-rendered-library-page-f2)
+4. [Save and delete a highlight, free limit (F3, F4)](#4-save-and-delete-a-highlight-free-limit-f3-f4)
+5. [PDF or Word import (F11)](#5-pdf-or-word-import-f11)
+6. [Save from the extension (F13)](#6-save-from-the-extension-f13)
+7. [Paddle checkout and webhook (F15)](#7-paddle-checkout-and-webhook-f15)
 
 ## 1. Register or sign in (F1)
 
@@ -63,40 +62,7 @@ sequenceDiagram
 - The `ari` server refreshes only when `ari_access` is missing. The cookie expires a minute before its
   JWT, so a cookie the browser still sends is always valid.
 
-## 3. Sign in with Google (F9)
-
-```mermaid
-sequenceDiagram
-  participant B as Browser
-  participant A as ari-api
-  participant G as Google
-  B->>A: GET /oauth2/authorization/google (full-page link)
-  A-->>B: 302 to Google (state kept in a short session)
-  B->>G: Sign in and approve
-  G-->>B: 302 to /login/oauth2/code/google with a code
-  B->>A: GET /login/oauth2/code/google?code=...&state=...
-  A->>G: Exchange the code
-  G-->>A: ID token: sub, email, email_verified, name
-  alt Known Google account (GOOGLE, sub)
-    A->>A: Use its user
-  else Verified email that has a user
-    A->>A: Link Google to it. Email never verified: remove the password, end its sessions
-  else Verified email that is new
-    A->>A: Create a user without a password, email verified
-  end
-  alt Accepted
-    A->>A: Create JWT and refresh token, end the handshake session
-    A-->>B: Set-Cookie ari_access, ari_refresh + 302 to http://localhost:3000/library
-  else Refused or failed
-    A-->>B: 302 to http://localhost:3000/login?error=google
-  end
-```
-
-- Refused: Google hasn't verified the email, or the user already has another Google account.
-  Failed: the user cancelled at Google, or the `state` didn't match.
-- Google is matched by `sub`, so a Google account that changes its email still finds its user.
-
-## 4. Server-rendered library page (F2)
+## 3. Server-rendered library page (F2)
 
 ```mermaid
 sequenceDiagram
@@ -132,7 +98,7 @@ sequenceDiagram
 - Phase 1 (F2) matches `q` case-insensitively against text and title in memory. F10 swaps in
   Postgres full-text search behind the same endpoint.
 
-## 5. Save and delete a highlight, free limit (F3, F4)
+## 4. Save and delete a highlight, free limit (F3, F4)
 
 ```mermaid
 sequenceDiagram
@@ -175,7 +141,7 @@ sequenceDiagram
   once `savesCount` reaches `savesLimit`.
 - Phase 1 (no database until F8): the same check and change run in memory under a per-user lock.
 
-## 6. PDF or Word import (F11)
+## 5. PDF or Word import (F11)
 
 ```mermaid
 sequenceDiagram
@@ -203,7 +169,7 @@ sequenceDiagram
   C->>S: GET the file
   C->>C: PDFBox reads PDF highlight annotations with page numbers, POI reads DOCX highlights and comments
   alt Parsed, n highlights fit under the limit
-    C->>D: One transaction: saves_count + n (check as in section 5), INSERT n highlights (kind FILE), status DONE, INSERT processed_events
+    C->>D: One transaction: saves_count + n (check as in section 4), INSERT n highlights (kind FILE), status DONE, INSERT processed_events
     C->>S: DELETE the file
     C->>Q: ack
   else Parsed, n highlights would pass the free limit
@@ -231,7 +197,7 @@ sequenceDiagram
   storage, outbox or queue.
 - Photos are not imported here: OCR runs in the browser (F12) and saves through `POST /highlights`.
 
-## 7. Save from the extension (F13)
+## 6. Save from the extension (F13)
 
 ```mermaid
 sequenceDiagram
@@ -256,7 +222,7 @@ sequenceDiagram
   end
   Note over X,R: Save a highlight
   X->>A: POST /api/v1/highlights (Bearer token, kind TEXT, text, source fields, jumpLink)
-  A->>A: Same validation and limit check as section 5
+  A->>A: Same validation and limit check as section 4
   A-->>X: 201 HighlightResponse, or 403 LIMIT_REACHED
   Note over X,R: Access token expired
   X->>A: POST /api/v1/auth/extension/refresh (refreshToken)
@@ -272,7 +238,7 @@ sequenceDiagram
 - The extension builds `jumpLink` as a text-fragment URL (`#:~:text=`). Clips (F14) use the same
   `POST /highlights` with `kind CLIP` and `contentMd`.
 
-## 8. Paddle checkout and webhook (F15)
+## 7. Paddle checkout and webhook (F15)
 
 ```mermaid
 sequenceDiagram

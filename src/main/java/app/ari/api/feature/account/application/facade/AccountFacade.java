@@ -1,6 +1,5 @@
 package app.ari.api.feature.account.application.facade;
 
-import app.ari.api.feature.account.application.model.request.GoogleProfile;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.response.AuthTokens;
@@ -25,7 +24,4 @@ public interface AccountFacade {
 
   /** Throws {@code SessionExpiredException} when the user no longer exists. */
   MeResponse me(UUID userId);
-
-  /** Throws {@code GoogleSignInRejectedException} when Google sign-in is refused. */
-  AuthTokens signInWithGoogle(GoogleProfile profile);
 }

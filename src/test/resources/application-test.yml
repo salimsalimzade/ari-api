@@ -3,6 +3,3 @@ app:
   seed-demo-data: true
   auth:
     jwt-secret: test-only-jwt-secret-never-used-outside-tests
-    google:
-      client-id: test-google-client-id
-      client-secret: test-google-client-secret

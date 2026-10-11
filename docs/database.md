@@ -1,15 +1,14 @@
 # Ari database
 
 Last updated 2026-10-08. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
-queries with MyBatis. The sign-in tables (`users`, `oauth_accounts`, `refresh_tokens`) exist since
-F1 and F9; every other table arrives with the feature that first uses it. The flows that use these
+queries with MyBatis. The sign-in tables (`users`, `refresh_tokens`) exist since
+F1; every other table arrives with the feature that first uses it. The flows that use these
 tables are in [sequences.md](sequences.md).
 
 ## 1. Tables and relations
 
 ```mermaid
 erDiagram
-  users ||--o{ oauth_accounts : "signs in with"
   users ||--o{ refresh_tokens : "has sessions"
   users ||--o{ folders : owns
   users ||--o{ highlights : owns
@@ -21,22 +20,14 @@ erDiagram
     uuid id PK
     varchar email UK "stored lowercase"
     varchar username UK "stored lowercase, 3-30 chars"
-    varchar password_hash "null for Google-only users"
+    varchar password_hash
     varchar full_name
-    date birth_date "null for Google-only users until given"
+    date birth_date
     varchar plan "FREE or PRO"
     int saves_count "highlights stored now"
     timestamptz email_verified_at "null until verified"
     timestamptz created_at
     timestamptz updated_at
-  }
-  oauth_accounts {
-    uuid id PK
-    uuid user_id FK
-    varchar provider "GOOGLE"
-    varchar provider_user_id "Google sub"
-    varchar email "email at Google"
-    timestamptz created_at
   }
   refresh_tokens {
     uuid id PK
@@ -127,8 +118,7 @@ All ids are UUIDs created in code. All times are `timestamptz` in UTC, and `crea
 
 | Table | Column details and constraints |
 |---|---|
-| `users` | `email varchar(320)` unique, always trimmed and lowercased in code. `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `password_hash varchar(100)` nullable. `full_name varchar(150)`. `birth_date date` nullable (Google sign-up has none). `plan varchar(10)` default `FREE`, check `FREE`/`PRO`. `saves_count int` default 0, check `>= 0` |
-| `oauth_accounts` | FK `user_id` → `users.id` on delete cascade. `provider varchar(20)`. `provider_user_id varchar(255)`. Unique `(provider, provider_user_id)` and unique `(user_id, provider)` |
+| `users` | `email varchar(320)` unique, always trimmed and lowercased in code. `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `password_hash varchar(100)` nullable. `full_name varchar(150)`. `birth_date date` nullable. `plan varchar(10)` default `FREE`, check `FREE`/`PRO`. `saves_count int` default 0, check `>= 0` |
 | `refresh_tokens` | FK `user_id` → `users.id` on delete cascade. `token_hash varchar(64)` unique. `client varchar(20)`, check `WEB`/`EXTENSION`. Indexes on `user_id` and `family_id`. The 10-second reuse grace counts from `revoked_at` and applies only while the family still has an active token |
 | `folders` | FK `user_id` → `users.id` on delete cascade. `name varchar(100)`, trimmed, unique `(user_id, lower(name))`. A folder's highlight count is a `COUNT(*)`, not a stored column |
 | `highlights` | FK `user_id` → `users.id` on delete cascade. FK `folder_id` → `folders.id` on delete set null. FK `import_id` → `imports.id` on delete set null. `kind varchar(10)`, check `TEXT`/`CLIP`/`FILE`/`IMAGE`. `text` not null (for `CLIP`, a plain-text copy for search). `source_title varchar(500)`, `source_site varchar(255)`, `file_name varchar(255)`, `page_number int` check `> 0`. Index `(user_id, created_at desc, id desc)` for cursor paging, index on `folder_id` |
@@ -146,12 +136,12 @@ Search (F10) adds to `highlights`:
 ## 3. Plan and saves
 
 - `users.plan` and `users.saves_count` decide the free limit; the JWT `plan` claim is never used for
-  it ([sequences §5](sequences.md#5-save-and-delete-a-highlight-free-limit-f3-f4)).
+  it ([sequences §4](sequences.md#4-save-and-delete-a-highlight-free-limit-f3-f4)).
 - `saves_count` is the number of the user's highlights right now. It changes in the same transaction
   as every insert and delete, so Free means at most 500 stored at once.
 - `subscriptions.status` drives `users.plan` in the same transaction: `active`, `trialing` and
   `past_due` → `PRO`; `paused` and `canceled` → `FREE`
-  ([sequences §8](sequences.md#8-paddle-checkout-and-webhook-f15)).
+  ([sequences §7](sequences.md#7-paddle-checkout-and-webhook-f15)).
 
 ## 4. Changesets
 
@@ -161,11 +151,12 @@ file; add a new one instead.
 | File | Feature |
 |---|---|
 | `001-create-users.yaml` | F1 (done) |
-| `002-create-oauth-accounts.yaml` | F9 (done) |
+| `002-create-oauth-accounts.yaml` | F9 (done, dropped by 004) |
 | `003-create-refresh-tokens.yaml` | F1 (done) |
-| `004-create-folders.yaml` | F2 |
-| `005-create-imports.yaml` | F2 (`highlights` references it) |
-| `006-create-highlights.yaml` | F2 |
-| `007-add-highlight-search.yaml` | F10 |
-| `008-create-outbox-and-processed-events.yaml` | F11 |
-| `009-create-subscriptions.yaml` | F15 |
+| `004-drop-oauth-accounts.yaml` | Google sign-in postponed (done) |
+| `005-create-folders.yaml` | F2 |
+| `006-create-imports.yaml` | F2 (`highlights` references it) |
+| `007-create-highlights.yaml` | F2 |
+| `008-add-highlight-search.yaml` | F10 |
+| `009-create-outbox-and-processed-events.yaml` | F11 |
+| `010-create-subscriptions.yaml` | F15 |

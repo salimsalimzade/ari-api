@@ -13,7 +13,7 @@ Last updated 2026-10-08. Ari ("arı" means "bee" in Azerbaijani) lives in two re
 
 Write "Ari" in UI text and `ari` in code, package names and URLs; never use the dotless "ı" there.
 
-Accounts are real: sign-in with a password or Google (F1, F9), stored in PostgreSQL with Liquibase
+Accounts are real: sign-in with a password (F1), stored in PostgreSQL with Liquibase
 and MyBatis. Every new feature stores its data in PostgreSQL from the start; there is no in-memory
 mode. Formatting, linting and CI run on every change. Not yet: queues, storage, Redis or billing.
 Those are the TODO list in section 10, with the decisions already made. Diagrams and the sign-in
@@ -57,7 +57,6 @@ class `AriApiApplication`.
 | `spring-boot-starter-validation` | Request validation |
 | `spring-boot-starter-actuator` | `/actuator/health` |
 | `spring-boot-starter-security-oauth2-resource-server` | Spring Security; our JWTs, read from the `ari_access` cookie or a Bearer header |
-| `spring-boot-starter-security-oauth2-client` | Google sign-in |
 | `spring-boot-starter-jdbc`, `mybatis-spring-boot-starter` (4.x for Boot 4), `postgresql` | Database access with SQL in XML mappers |
 | `spring-boot-starter-liquibase` | Creates and updates the tables at startup |
 | `springdoc-openapi-starter-webmvc-ui` (the version line for Boot 4) | Swagger UI and `/v3/api-docs` |
@@ -98,7 +97,7 @@ ari-api/
     │   │   ├── validation/             # shared constraints, e.g. @MaxBytes
     │   │   ├── request/ · response/    # shared DTOs: cursor params, PageResponse<T>
     │   │   └── util/                   # small helpers: ids, time
-    │   ├── config/                     # Spring config: security (JWT, Google), OpenAPI, CORS, Clock (later: RabbitMQ, storage)
+    │   ├── config/                     # Spring config: security (JWT), OpenAPI, CORS, Clock (later: RabbitMQ, storage)
     │   └── feature/                    # one folder per aggregate
     │       ├── highlight/              # ← reference module, copy this layout
     │       │   ├── presentation/       # HighlightController (interface + Swagger) + impl/HighlightControllerImpl
@@ -113,7 +112,7 @@ ari-api/
     │       │   │   └── service/        # HighlightService + impl/HighlightServiceImpl
     │       │   └── infrastructure/     # HighlightMyBatisRepository (@Mapper extending the port)
     │       ├── folder/                 # same layout as highlight
-    │       ├── account/                # built: sign-in (password, Google), sessions, GET /me
+    │       ├── account/                # built: sign-in (password), sessions, GET /me
     │       ├── fileimport/             # same layout; returns a fake finished job ("import" is a Java keyword)
     │       ├── outbox/                 # package-info.java only (TODO 5)
     │       └── util/                   # package-info.java only: storage helpers (TODO 4)
@@ -154,8 +153,8 @@ Rules:
   `app.cors.allowed-origins` in `application.yml`, which takes `APP_CORS_ALLOWED_ORIGINS`
   (comma-separated; default `http://localhost:3000`).
 - **Sign-in:** every endpoint except `/api/v1/auth/**`, health and Swagger needs a signed-in user;
-  read their id from `@AuthenticationPrincipal Jwt` (`jwt.getSubject()`). The cookie, token and
-  Google rules are in `docs/architecture.md`.
+  read their id from `@AuthenticationPrincipal Jwt` (`jwt.getSubject()`). The cookie and token
+  rules are in `docs/architecture.md`.
 - **Config and secrets:** secrets and values that differ per environment never go in the repo.
   `application.yml` refers to them as `${VAR:default}` placeholders (no default for real
   secrets). Locally they come from the git-ignored `.env`, which the `dev` profile imports
@@ -194,7 +193,6 @@ enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 | `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears both |
 | `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears both cookies |
 | `GET /me` | `account` | The signed-in user (plan `FREE`, `savesLimit` 500); 401 when signed out |
-| `GET /oauth2/authorization/google` | `account` | Google sign-in (a full-page link, not `fetch`) |
 | `GET /folders` | `folder` | Seeded folders, e.g. "Spring Boot" and "Thesis" |
 | `POST /folders` `{ name }` | `folder` | Adds a folder in memory |
 | `GET /highlights?folderId=&q=&cursor=` | `highlight` | Filters the in-memory list (case-insensitive match on text and title), 50 per page |
@@ -401,9 +399,9 @@ Do these in order, one at a time:
    plus numbered files in `v1/`; never edit an applied file. No in-memory or `mock` mode: the
    frontend runs PostgreSQL with docker compose. Keep a `users.saves_count` counter for the plan
    limit. Each library feature adds its own tables (see `docs/database.md`).
-2. **Auth (done, F1 and F9):** Spring Security; our own JWT access tokens (15 minutes) plus rotating
-   refresh tokens (httpOnly cookies for the website); Google sign-in through OAuth2 Client; email +
-   password with bcrypt. Rules in `docs/architecture.md`.
+2. **Auth (done, F1):** Spring Security; our own JWT access tokens (15 minutes) plus rotating
+   refresh tokens (httpOnly cookies for the website); email +
+   password with bcrypt. Google sign-in (F9) is postponed. Rules in `docs/architecture.md`.
 3. **Search:** Postgres full-text search: a generated `tsvector` column with the `simple` config, an
    IMMUTABLE wrapper around `unaccent`, a GIN index, and `pg_trgm` for short or partial queries.
    Added as a Liquibase changeset.

@@ -8,13 +8,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
 import org.springframework.context.annotation.Import;
-import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
 
-/** The app as it starts without Google credentials, like in CI and a fresh clone. */
-@SpringBootTest(properties = {"app.auth.google.client-id=", "app.auth.google.client-secret="})
+/** The app as it starts in CI and on a fresh clone. */
+@SpringBootTest
 @AutoConfigureMockMvc
 @ActiveProfiles("test")
 @Import(IntegrationTestConfiguration.class)
@@ -32,7 +31,7 @@ class AriApiApplicationTests {
                     + " AND table_name IN ('users', 'oauth_accounts', 'refresh_tokens')"
                     + " ORDER BY table_name",
                 String.class))
-        .containsExactly("oauth_accounts", "refresh_tokens", "users");
+        .containsExactly("refresh_tokens", "users");
   }
 
   @Test
@@ -42,10 +41,5 @@ class AriApiApplicationTests {
         .bodyJson()
         .extractingPath("$.status")
         .isEqualTo("UP");
-  }
-
-  @Test
-  void googleSignInIsOffWithoutCredentials() {
-    assertThat(mvc.get().uri("/oauth2/authorization/google")).hasStatus(HttpStatus.NOT_FOUND);
   }
 }

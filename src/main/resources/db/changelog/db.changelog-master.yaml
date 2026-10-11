@@ -9,3 +9,6 @@ databaseChangeLog:
   - include:
       file: v1/003-create-refresh-tokens.yaml
       relativeToChangelogFile: true
+  - include:
+      file: v1/004-drop-oauth-accounts.yaml
+      relativeToChangelogFile: true
