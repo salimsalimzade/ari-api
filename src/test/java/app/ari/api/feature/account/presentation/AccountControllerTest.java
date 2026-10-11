@@ -8,6 +8,7 @@ import app.ari.api.support.IntegrationTest;
 import app.ari.api.support.MutableClock;
 import jakarta.servlet.http.Cookie;
 import java.time.Duration;
+import java.util.Locale;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -31,7 +32,7 @@ class AccountControllerTest {
   void registerCreatesTheAccountAndSignsItIn() {
     String email = newEmail();
 
-    MvcTestResult result = register(email.toUpperCase(), PASSWORD);
+    MvcTestResult result = register(email.toUpperCase(Locale.ROOT), PASSWORD);
 
     assertThat(result).hasStatus(HttpStatus.CREATED);
     assertThat(result).bodyJson().extractingPath("$.email").isEqualTo(email);
@@ -54,7 +55,7 @@ class AccountControllerTest {
     String email = newEmail();
     register(email, PASSWORD);
 
-    MvcTestResult result = register(email.toUpperCase(), PASSWORD);
+    MvcTestResult result = register(email.toUpperCase(Locale.ROOT), PASSWORD);
 
     assertThat(result).hasStatus(HttpStatus.CONFLICT);
     assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("EMAIL_TAKEN");
@@ -68,7 +69,8 @@ class AccountControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"email": "not-an-email", "password": "short", "displayName": ""}
+                {"email": "not-an-email", "username": "a b", "password": "short",
+                 "fullName": "", "birthDate": "2999-01-01"}
                 """)
             .exchange();
 
@@ -78,7 +80,50 @@ class AccountControllerTest {
         .bodyJson()
         .extractingPath("$.errors[*].field")
         .asArray()
-        .contains("email", "password", "displayName");
+        .contains("email", "username", "password", "fullName", "birthDate");
+  }
+
+  @Test
+  void registerRequiresABirthDate() {
+    MvcTestResult result =
+        mvc.post()
+            .uri("/api/v1/auth/register")
+            .contentType(MediaType.APPLICATION_JSON)
+            .content(
+                """
+                {"email": "%s", "username": "%s", "password": "%s", "fullName": "Test User"}
+                """
+                    .formatted(newEmail(), newUsername(), PASSWORD))
+            .exchange();
+
+    assertThat(result).hasStatus(HttpStatus.BAD_REQUEST);
+    assertThat(result).bodyJson().extractingPath("$.errors[0].field").isEqualTo("birthDate");
+  }
+
+  @Test
+  void registerStoresTheUsernameInLowercaseAndReturnsTheProfile() {
+    String username = "Ada.Lovelace" + UUID.randomUUID().toString().substring(0, 4);
+
+    MvcTestResult result = register(newEmail(), username, PASSWORD);
+
+    assertThat(result).hasStatus(HttpStatus.CREATED);
+    assertThat(result)
+        .bodyJson()
+        .extractingPath("$.username")
+        .isEqualTo(username.toLowerCase(Locale.ROOT));
+    assertThat(result).bodyJson().extractingPath("$.fullName").isEqualTo("Test User");
+    assertThat(result).bodyJson().extractingPath("$.birthDate").isEqualTo("1990-05-17");
+  }
+
+  @Test
+  void registerRejectsATakenUsernameInAnyCase() {
+    String username = newUsername();
+    register(newEmail(), username, PASSWORD);
+
+    MvcTestResult result = register(newEmail(), username.toUpperCase(Locale.ROOT), PASSWORD);
+
+    assertThat(result).hasStatus(HttpStatus.CONFLICT);
+    assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("USERNAME_TAKEN");
   }
 
   @Test
@@ -95,7 +140,8 @@ class AccountControllerTest {
     MvcTestResult result = login("demo@example.com", "demo1234");
 
     assertThat(result).hasStatusOk();
-    assertThat(result).bodyJson().extractingPath("$.displayName").isEqualTo("Demo User");
+    assertThat(result).bodyJson().extractingPath("$.fullName").isEqualTo("Demo User");
+    assertThat(result).bodyJson().extractingPath("$.username").isEqualTo("demo");
     assertThat(result).cookies().containsCookies(ACCESS, REFRESH);
   }
 
@@ -251,14 +297,19 @@ class AccountControllerTest {
   }
 
   private MvcTestResult register(String email, String password) {
+    return register(email, newUsername(), password);
+  }
+
+  private MvcTestResult register(String email, String username, String password) {
     return mvc.post()
         .uri("/api/v1/auth/register")
         .contentType(MediaType.APPLICATION_JSON)
         .content(
             """
-            {"email": "%s", "password": "%s", "displayName": "Test User"}
+            {"email": "%s", "username": "%s", "password": "%s", "fullName": "Test User",
+             "birthDate": "1990-05-17"}
             """
-                .formatted(email, password))
+                .formatted(email, username, password))
         .exchange();
   }
 
@@ -285,6 +336,10 @@ class AccountControllerTest {
     Cookie cookie = result.getResponse().getCookie(name);
     assertThat(cookie).as("cookie %s", name).isNotNull();
     return cookie.getValue();
+  }
+
+  private static String newUsername() {
+    return "user_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
   }
 
   private static String newEmail() {

@@ -1,17 +1,21 @@
 package app.ari.api.feature.account.domain.model;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Someone who can sign in. {@code email} is trimmed and lowercase; {@code passwordHash} is null for
- * users who only sign in with Google; {@code emailVerifiedAt} is null until the email is proven.
+ * Someone who can sign in. {@code email} and {@code username} are trimmed and lowercase; {@code
+ * passwordHash} is null for users who only sign in with Google; {@code birthDate} is null for
+ * Google users until they give one; {@code emailVerifiedAt} is null until the email is proven.
  */
 public record User(
     UUID id,
     String email,
+    String username,
     String passwordHash,
-    String displayName,
+    String fullName,
+    LocalDate birthDate,
     Plan plan,
     int savesCount,
     Instant emailVerifiedAt,
@@ -26,6 +30,7 @@ public record User(
     if (emailVerifiedAt != null) {
       return this;
     }
-    return new User(id, email, null, displayName, plan, savesCount, now, createdAt, now);
+    return new User(
+        id, email, username, null, fullName, birthDate, plan, savesCount, now, createdAt, now);
   }
 }

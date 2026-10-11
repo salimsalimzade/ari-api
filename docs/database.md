@@ -20,8 +20,10 @@ erDiagram
   users {
     uuid id PK
     varchar email UK "stored lowercase"
+    varchar username UK "stored lowercase, 3-30 chars"
     varchar password_hash "null for Google-only users"
-    varchar display_name
+    varchar full_name
+    date birth_date "null for Google-only users until given"
     varchar plan "FREE or PRO"
     int saves_count "highlights stored now"
     timestamptz email_verified_at "null until verified"
@@ -125,7 +127,7 @@ All ids are UUIDs created in code. All times are `timestamptz` in UTC, and `crea
 
 | Table | Column details and constraints |
 |---|---|
-| `users` | `email varchar(320)` unique, always trimmed and lowercased in code. `password_hash varchar(100)` nullable. `display_name varchar(100)`. `plan varchar(10)` default `FREE`, check `FREE`/`PRO`. `saves_count int` default 0, check `>= 0` |
+| `users` | `email varchar(320)` unique, always trimmed and lowercased in code. `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `password_hash varchar(100)` nullable. `full_name varchar(150)`. `birth_date date` nullable (Google sign-up has none). `plan varchar(10)` default `FREE`, check `FREE`/`PRO`. `saves_count int` default 0, check `>= 0` |
 | `oauth_accounts` | FK `user_id` → `users.id` on delete cascade. `provider varchar(20)`. `provider_user_id varchar(255)`. Unique `(provider, provider_user_id)` and unique `(user_id, provider)` |
 | `refresh_tokens` | FK `user_id` → `users.id` on delete cascade. `token_hash varchar(64)` unique. `client varchar(20)`, check `WEB`/`EXTENSION`. Indexes on `user_id` and `family_id`. The 10-second reuse grace counts from `revoked_at` and applies only while the family still has an active token |
 | `folders` | FK `user_id` → `users.id` on delete cascade. `name varchar(100)`, trimmed, unique `(user_id, lower(name))`. A folder's highlight count is a `COUNT(*)`, not a stored column |

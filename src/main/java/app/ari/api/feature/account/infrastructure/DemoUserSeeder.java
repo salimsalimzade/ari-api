@@ -5,6 +5,7 @@ import app.ari.api.feature.account.domain.model.User;
 import app.ari.api.feature.account.domain.repository.UserRepository;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.UUID;
 import org.springframework.boot.ApplicationArguments;
 import org.springframework.boot.ApplicationRunner;
@@ -23,6 +24,7 @@ public class DemoUserSeeder implements ApplicationRunner {
 
   static final UUID DEMO_USER_ID = UUID.fromString("00000000-0000-4000-8000-000000000001");
   static final String DEMO_EMAIL = "demo@example.com";
+  static final String DEMO_USERNAME = "demo";
   static final String DEMO_PASSWORD = "demo1234";
 
   private final UserRepository users;
@@ -45,8 +47,10 @@ public class DemoUserSeeder implements ApplicationRunner {
         new User(
             DEMO_USER_ID,
             DEMO_EMAIL,
+            DEMO_USERNAME,
             passwordEncoder.encode(DEMO_PASSWORD),
             "Demo User",
+            LocalDate.of(1990, 1, 1),
             Plan.FREE,
             0,
             now,

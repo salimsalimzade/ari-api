@@ -20,7 +20,7 @@ sequenceDiagram
   participant B as Browser
   participant A as ari-api
   alt Register
-    B->>A: POST /api/v1/auth/register (email, password, displayName)
+    B->>A: POST /api/v1/auth/register (email, username, password, fullName, birthDate)
     A->>A: Normalize email, check it is free, hash password, save user
   else Sign in
     B->>A: POST /api/v1/auth/login (email, password)

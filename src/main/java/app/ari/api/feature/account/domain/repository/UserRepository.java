@@ -12,7 +12,13 @@ public interface UserRepository {
   /** Looks up a normalized (trimmed, lowercase) email. */
   Optional<User> findByEmail(String email);
 
-  /** Adds the user; returns false and changes nothing when the email is already taken. */
+  /** Whether a normalized (trimmed, lowercase) username is already used. */
+  boolean existsByUsername(String username);
+
+  /**
+   * Adds the user; returns false and changes nothing when the email or the username is already
+   * taken.
+   */
   boolean insert(User user);
 
   void update(User user);

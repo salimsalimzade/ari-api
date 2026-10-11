@@ -31,7 +31,7 @@ public interface AccountController {
   @SecurityRequirements
   @ApiResponse(responseCode = "201", description = "Registered; both cookies are set")
   @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
-  @ApiResponse(responseCode = "409", description = "EMAIL_TAKEN")
+  @ApiResponse(responseCode = "409", description = "EMAIL_TAKEN or USERNAME_TAKEN")
   @PostMapping("/auth/register")
   ResponseEntity<MeResponse> register(@Valid @RequestBody RegisterRequest request);
 

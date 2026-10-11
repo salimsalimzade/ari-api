@@ -171,7 +171,7 @@ frontend repo mirrors this contract, so keep `/v3/api-docs` accurate: the fronte
 its client from it later.
 
 ```java
-public record MeResponse(UUID id, String email, String displayName, Plan plan, int savesCount, int savesLimit) {}
+public record MeResponse(UUID id, String email, String username, String fullName, LocalDate birthDate, Plan plan, int savesCount, int savesLimit) {}
 public record FolderResponse(UUID id, String name, int highlightsCount) {}
 public record HighlightResponse(
     UUID id, UUID folderId, HighlightKind kind,
@@ -189,7 +189,7 @@ enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 
 | Endpoint | Feature | Behavior |
 |---|---|---|
-| `POST /auth/register` `{ email, password, displayName }` | `account` | 201 + `MeResponse` + both cookies; 409 `EMAIL_TAKEN` |
+| `POST /auth/register` `{ email, username, password, fullName, birthDate }` | `account` | 201 + `MeResponse` + both cookies; 409 `EMAIL_TAKEN` or `USERNAME_TAKEN` |
 | `POST /auth/login` `{ email, password }` | `account` | 200 + `MeResponse` + both cookies; 401 `INVALID_CREDENTIALS` |
 | `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears both |
 | `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears both cookies |

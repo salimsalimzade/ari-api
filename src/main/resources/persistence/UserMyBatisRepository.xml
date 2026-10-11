@@ -3,8 +3,8 @@
 <mapper namespace="app.ari.api.feature.account.infrastructure.UserMyBatisRepository">
 
   <sql id="columns">
-    id, email, password_hash, display_name, plan, saves_count, email_verified_at, created_at,
-    updated_at
+    id, email, username, password_hash, full_name, birth_date, plan, saves_count,
+    email_verified_at, created_at, updated_at
   </sql>
 
   <select id="findById" resultType="app.ari.api.feature.account.domain.model.User">
@@ -15,18 +15,24 @@
     SELECT <include refid="columns"/> FROM users WHERE email = #{email}
   </select>
 
-  <!-- The unique email decides: 0 rows inserted means the email is taken. -->
+  <select id="existsByUsername" resultType="boolean">
+    SELECT EXISTS (SELECT 1 FROM users WHERE username = #{username})
+  </select>
+
+  <!-- A unique key decides: 0 rows inserted means the email or the username is taken. -->
   <insert id="insert">
     INSERT INTO users (<include refid="columns"/>)
-    VALUES (#{id}, #{email}, #{passwordHash}, #{displayName}, #{plan}, #{savesCount},
-            #{emailVerifiedAt}, #{createdAt}, #{updatedAt})
+    VALUES (#{id}, #{email}, #{username}, #{passwordHash}, #{fullName},
+            #{birthDate,jdbcType=DATE}, #{plan}, #{savesCount}, #{emailVerifiedAt},
+            #{createdAt}, #{updatedAt})
     ON CONFLICT DO NOTHING
   </insert>
 
   <update id="update">
     UPDATE users
     SET password_hash = #{passwordHash},
-        display_name = #{displayName},
+        full_name = #{fullName},
+        birth_date = #{birthDate,jdbcType=DATE},
         plan = #{plan},
         saves_count = #{savesCount},
         email_verified_at = #{emailVerifiedAt},

@@ -20,13 +20,23 @@ databaseChangeLog:
                     unique: true
                     uniqueConstraintName: users_email_key
               - column:
+                  name: username
+                  type: varchar(30)
+                  constraints:
+                    nullable: false
+                    unique: true
+                    uniqueConstraintName: users_username_key
+              - column:
                   name: password_hash
                   type: varchar(100)
               - column:
-                  name: display_name
-                  type: varchar(100)
+                  name: full_name
+                  type: varchar(150)
                   constraints:
                     nullable: false
+              - column:
+                  name: birth_date
+                  type: date
               - column:
                   name: plan
                   type: varchar(10)
@@ -57,6 +67,8 @@ databaseChangeLog:
         - sql:
             sql: >-
               ALTER TABLE users
+              ADD CONSTRAINT users_username_check
+                CHECK (username = lower(username) AND username ~ '^[a-z0-9_.]{3,30}$'),
               ADD CONSTRAINT users_plan_check CHECK (plan IN ('FREE', 'PRO')),
               ADD CONSTRAINT users_saves_count_check CHECK (saves_count >= 0)
       rollback:

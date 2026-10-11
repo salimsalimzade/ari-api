@@ -15,6 +15,7 @@ import app.ari.api.support.IntegrationTest;
 import jakarta.servlet.http.Cookie;
 import java.time.Clock;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
@@ -64,8 +65,34 @@ class GoogleSignInTest {
     User user = users.findByEmail(email).orElseThrow();
     assertThat(user.passwordHash()).isNull();
     assertThat(user.emailVerifiedAt()).isNotNull();
-    assertThat(user.displayName()).isEqualTo("Ada Lovelace");
+    assertThat(user.fullName()).isEqualTo("Ada Lovelace");
+    assertThat(user.birthDate()).isNull();
     assertThat(user.plan()).isEqualTo(Plan.FREE);
+  }
+
+  @Test
+  void aNewGoogleUserGetsAUsernameMadeFromTheEmail() {
+    String local = "ada.love-" + UUID.randomUUID().toString().substring(0, 8);
+
+    facade.signInWithGoogle(
+        new GoogleProfile(newSubject(), local + "@example.com", true, "Ada Lovelace"));
+
+    User user = users.findByEmail(local + "@example.com").orElseThrow();
+    assertThat(user.username()).isEqualTo(local.replace('-', '_'));
+  }
+
+  @Test
+  void twoGoogleUsersWithTheSameEmailNameGetDifferentUsernames() {
+    String local = "twin" + UUID.randomUUID().toString().substring(0, 8);
+
+    facade.signInWithGoogle(
+        new GoogleProfile(newSubject(), local + "@example.com", true, "First Twin"));
+    facade.signInWithGoogle(
+        new GoogleProfile(newSubject(), local + "@example.org", true, "Second Twin"));
+
+    assertThat(users.findByEmail(local + "@example.com").orElseThrow().username()).isEqualTo(local);
+    assertThat(users.findByEmail(local + "@example.org").orElseThrow().username())
+        .isEqualTo(local + "2");
   }
 
   @Test
@@ -89,8 +116,10 @@ class GoogleSignInTest {
         new User(
             UUID.randomUUID(),
             email,
+            "verified_" + UUID.randomUUID().toString().substring(0, 8),
             passwordEncoder.encode(PASSWORD),
             "Verified",
+            LocalDate.of(1990, 5, 17),
             Plan.FREE,
             0,
             now,
@@ -204,9 +233,10 @@ class GoogleSignInTest {
         .contentType(MediaType.APPLICATION_JSON)
         .content(
             """
-            {"email": "%s", "password": "%s", "displayName": "Test User"}
+            {"email": "%s", "username": "%s", "password": "%s", "fullName": "Test User",
+             "birthDate": "1990-05-17"}
             """
-                .formatted(email, PASSWORD))
+                .formatted(email, "user_" + UUID.randomUUID().toString().substring(0, 8), PASSWORD))
         .exchange();
   }
 

@@ -1,6 +1,7 @@
 package app.ari.api.feature.account.application.facade.impl;
 
 import app.ari.api.feature.account.application.exception.conflict.EmailTakenException;
+import app.ari.api.feature.account.application.exception.conflict.UsernameTakenException;
 import app.ari.api.feature.account.application.exception.unauthorized.GoogleSignInRejectedException;
 import app.ari.api.feature.account.application.exception.unauthorized.InvalidCredentialsException;
 import app.ari.api.feature.account.application.exception.unauthorized.SessionExpiredException;
@@ -45,8 +46,17 @@ public class AccountFacadeImpl implements AccountFacade {
   public SignedIn register(RegisterRequest request) {
     User user =
         accountService
-            .register(request.email(), request.password(), request.displayName())
-            .orElseThrow(EmailTakenException::new);
+            .register(
+                request.email(),
+                request.username(),
+                request.password(),
+                request.fullName(),
+                request.birthDate())
+            .orElseThrow(
+                () ->
+                    accountService.usernameTaken(request.username())
+                        ? new UsernameTakenException()
+                        : new EmailTakenException());
     return signIn(user);
   }
 

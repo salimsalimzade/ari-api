@@ -104,6 +104,7 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 | `LIMIT_REACHED` | 403 | A Free user already stores 500 highlights |
 | `NOT_FOUND` | 404 | The item does not exist or belongs to another user |
 | `EMAIL_TAKEN` | 409 | Register with an email that is already used |
+| `USERNAME_TAKEN` | 409 | Register with a username that is already used |
 
 ## 5. How it is built
 
