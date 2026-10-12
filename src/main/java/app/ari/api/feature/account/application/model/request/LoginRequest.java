@@ -5,5 +5,5 @@ import jakarta.validation.constraints.NotBlank;
 
 /** Body of {@code POST /api/v1/auth/login}. The examples are the local demo user. */
 public record LoginRequest(
-    @Schema(example = "hello@example.com") @NotBlank String email,
-    @Schema(example = "nice-foo-@") @NotBlank String password) {}
+    @Schema(example = "adalovelace") @NotBlank String username,
+    @Schema(example = "i<3you@*") @NotBlank String password) {}

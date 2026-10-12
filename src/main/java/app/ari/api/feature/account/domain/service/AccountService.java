@@ -8,18 +8,11 @@ import java.util.UUID;
 /** Who the users are and how they prove it: passwords. */
 public interface AccountService {
 
-  /**
-   * Creates a password user on the Free plan; empty when the email or the username is already taken
-   * (see {@link #usernameTaken}).
-   */
-  Optional<User> register(
-      String email, String username, String password, String fullName, LocalDate birthDate);
+  /** Creates a password user with no plan yet; empty when the username is already taken. */
+  Optional<User> register(String username, String password, String fullName, LocalDate birthDate);
 
-  /** Whether the username, compared after trimming and lowercasing, already belongs to a user. */
-  boolean usernameTaken(String username);
-
-  /** Checks an email and password; empty for every mismatch. */
-  Optional<User> authenticate(String email, String password);
+  /** Checks a username and password; empty for every mismatch. */
+  Optional<User> authenticate(String username, String password);
 
   Optional<User> findById(UUID id);
 }

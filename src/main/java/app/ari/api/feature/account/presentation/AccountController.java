@@ -27,15 +27,15 @@ import org.springframework.web.bind.annotation.RequestMapping;
 @RequestMapping("/api/v1")
 public interface AccountController {
 
-  @Operation(summary = "Register with email and password, and sign in")
+  @Operation(summary = "Register with username and password, and sign in")
   @SecurityRequirements
   @ApiResponse(responseCode = "201", description = "Registered; both cookies are set")
   @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
-  @ApiResponse(responseCode = "409", description = "EMAIL_TAKEN or USERNAME_TAKEN")
+  @ApiResponse(responseCode = "409", description = "USERNAME_TAKEN")
   @PostMapping("/auth/register")
   ResponseEntity<MeResponse> register(@Valid @RequestBody RegisterRequest request);
 
-  @Operation(summary = "Sign in with email and password")
+  @Operation(summary = "Sign in with username and password")
   @SecurityRequirements
   @ApiResponse(responseCode = "200", description = "Signed in; both cookies are set")
   @ApiResponse(responseCode = "401", description = "INVALID_CREDENTIALS")

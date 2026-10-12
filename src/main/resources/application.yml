@@ -18,7 +18,7 @@ mybatis:
 app:
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000}
-  # Adds the demo user (demo@example.com / demo1234). Local development only.
+  # Adds the demo user (demo / demo1234). Local development only.
   seed-demo-data: ${APP_SEED_DEMO_DATA:false}
   auth:
     jwt-secret: ${APP_JWT_SECRET}

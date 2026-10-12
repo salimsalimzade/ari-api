@@ -10,7 +10,7 @@ public class ConflictException extends RuntimeException {
     this.code = code;
   }
 
-  /** The stable error code the frontend checks, e.g. {@code EMAIL_TAKEN}. */
+  /** The stable error code the frontend checks, e.g. {@code USERNAME_TAKEN}. */
   public String getCode() {
     return code;
   }

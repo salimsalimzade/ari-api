@@ -11,15 +11,11 @@
     SELECT <include refid="columns"/> FROM users WHERE id = #{id}
   </select>
 
-  <select id="findByEmail" resultType="app.ari.api.feature.account.domain.model.User">
-    SELECT <include refid="columns"/> FROM users WHERE email = #{email}
+  <select id="findByUsername" resultType="app.ari.api.feature.account.domain.model.User">
+    SELECT <include refid="columns"/> FROM users WHERE username = #{username}
   </select>
 
-  <select id="existsByUsername" resultType="boolean">
-    SELECT EXISTS (SELECT 1 FROM users WHERE username = #{username})
-  </select>
-
-  <!-- A unique key decides: 0 rows inserted means the email or the username is taken. -->
+  <!-- A unique key decides: 0 rows inserted means the username is taken. -->
   <insert id="insert">
     INSERT INTO users (<include refid="columns"/>)
     VALUES (#{id}, #{email}, #{username}, #{passwordHash}, #{fullName},

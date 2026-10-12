@@ -101,7 +101,6 @@ public class TokenServiceImpl implements TokenService {
             .subject(user.id().toString())
             .issuedAt(now)
             .expiresAt(now.plus(ACCESS_TOKEN_TTL))
-            .claim("email", user.email())
             .claim("plan", user.plan().name())
             .build();
     JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();

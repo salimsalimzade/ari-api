@@ -10,7 +10,7 @@ import java.util.UUID;
 /** Sign-in use cases and the signed-in user. Other features use only this facade. */
 public interface AccountFacade {
 
-  /** Creates a password account and signs it in; throws {@code EmailTakenException}. */
+  /** Creates a password account and signs it in; throws {@code UsernameTakenException}. */
   SignedIn register(RegisterRequest request);
 
   /** Throws {@code InvalidCredentialsException} for every mismatch. */

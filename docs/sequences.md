@@ -19,11 +19,11 @@ sequenceDiagram
   participant B as Browser
   participant A as ari-api
   alt Register
-    B->>A: POST /api/v1/auth/register (email, username, password, fullName, birthDate)
-    A->>A: Normalize email, check it is free, hash password, save user
+    B->>A: POST /api/v1/auth/register (username, password, fullName, birthDate)
+    A->>A: Normalize username, hash password, save user (a taken username is 409)
   else Sign in
-    B->>A: POST /api/v1/auth/login (email, password)
-    A->>A: Find user by email, check password_hash
+    B->>A: POST /api/v1/auth/login (username, password)
+    A->>A: Find user by username, check password_hash
   end
   A->>A: Create JWT (15 min) and refresh token (30 days, store only its hash)
   A-->>B: Me + Set-Cookie ari_access, ari_refresh (httpOnly)

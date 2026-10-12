@@ -1,31 +1,71 @@
 # Ari database
 
-Last updated 2026-10-08. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
-queries with MyBatis. The sign-in tables (`users`, `refresh_tokens`) exist since
-F1; every other table arrives with the feature that first uses it. The flows that use these
-tables are in [sequences.md](sequences.md).
+Last updated 2026-10-12. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
+queries with MyBatis. The tables follow what the ari frontend shows: the Library, Sources, Imports,
+Notes and Settings pages, which run on sample data in the page until these tables exist. The
+sign-in tables (`users`, `refresh_tokens`) exist since F1; every other table arrives with the
+feature that first uses it. The flows that use these tables are in [sequences.md](sequences.md).
 
 ## 1. Tables and relations
 
+### 1.1 Overview
+
 ```mermaid
 erDiagram
-  users ||--o{ refresh_tokens : "has sessions"
-  users ||--o{ folders : owns
-  users ||--o{ highlights : owns
-  users ||--o{ imports : uploads
+  users ||--o{ refresh_tokens : "signs in with"
   users ||--o| subscriptions : "pays with"
-  folders |o--o{ highlights : contains
-  imports |o--o{ highlights : creates
+  users ||--o{ invoices : "is billed"
+  users ||--o{ sources : reads
+  users ||--o{ saves : keeps
+  users ||--o{ tags : names
+  users ||--o{ imports : uploads
+  users ||--o{ notes : writes
+  sources ||--o{ saves : "saved from"
+  saves ||--o{ save_tags : "tagged with"
+  tags ||--o{ save_tags : "used by"
+  imports |o--o| sources : becomes
+  imports ||--o{ import_marks : finds
+  import_marks |o--o| saves : "saved as"
+  notes ||--o{ note_blocks : "made of"
+  saves |o--o{ note_blocks : "quoted in"
+```
+
+`outbox_events` and `processed_events` (section 1.6) stand alone: they point at other rows through
+their payload and ids, not through foreign keys.
+
+Where each screen of the frontend gets its data:
+
+| Screen (ari) | Tables |
+|---|---|
+| Register, log in, the user in the sidebar | `users`, `refresh_tokens` |
+| Settings › Account: photo, profile, email | `users` (`avatar_key`, `email`, `email_verified_at`); the email's verify code lives in Redis |
+| Settings › Plan and billing | `subscriptions`, `invoices`; upload space is summed from `imports` |
+| Library: list, grid, type tabs, tag / color / source filters, reading view | `saves`, `sources`, `tags`, `save_tags` |
+| Sources and a source's page | `sources`, with counts, colors and "quoted in a note" computed from `saves` and `note_blocks` |
+| Imports and the review | `imports`, `import_marks`, which become `saves` of a file's `sources` row |
+| Notes | `notes`, `note_blocks`, whose quotes point at `saves` |
+| Search palette (⌘K) | `saves.search_vector`, `sources.search_vector` (F10) |
+| Settings › Export | Reads `saves`, `sources`, `tags` and `notes` and streams the file; no table |
+| Settings › Shortcuts and Connected apps, the language | No table: shortcuts are fixed, Notion and Google Docs are "coming soon", the language is the `ari_lang` cookie |
+
+### 1.2 Account and billing
+
+```mermaid
+erDiagram
+  users ||--o{ refresh_tokens : "signs in with"
+  users ||--o| subscriptions : "pays with"
+  users ||--o{ invoices : "is billed"
   users {
     uuid id PK
-    varchar email UK "stored lowercase"
+    varchar email UK "optional, null until added"
     varchar username UK "stored lowercase, 3-30 chars"
-    varchar password_hash
+    varchar password_hash "bcrypt"
     varchar full_name
     date birth_date
-    varchar plan "FREE or PRO"
-    int saves_count "highlights stored now"
-    timestamptz email_verified_at "null until verified"
+    varchar avatar_key "profile photo in storage, null shows the initial"
+    varchar plan "NONE until the trial starts, then follows subscriptions"
+    int saves_count "the Library count in the sidebar"
+    timestamptz email_verified_at "null until the link is opened"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -39,58 +79,204 @@ erDiagram
     timestamptz revoked_at "null while valid"
     timestamptz created_at
   }
-  folders {
-    uuid id PK
-    uuid user_id FK
-    varchar name
-    timestamptz created_at
-    timestamptz updated_at
-  }
-  highlights {
-    uuid id PK
-    uuid user_id FK
-    uuid folder_id FK "null means unsorted"
-    uuid import_id FK "null unless imported"
-    varchar kind "TEXT, CLIP, FILE or IMAGE"
-    text text "highlighted or recognized text"
-    text content_md "CLIP only"
-    varchar source_title
-    varchar source_site
-    text source_url
-    varchar file_name "FILE and IMAGE"
-    int page_number "FILE only"
-    text jump_link
-    tsvector search_vector "generated, F10"
-    timestamptz created_at
-    timestamptz updated_at
-  }
-  imports {
-    uuid id PK
-    uuid user_id FK
-    varchar file_name
-    varchar content_type
-    bigint size_bytes
-    varchar storage_key "null once the file is deleted"
-    varchar status "QUEUED, PROCESSING, DONE or FAILED"
-    int highlights_count
-    varchar error_code "null unless FAILED"
-    timestamptz created_at
-    timestamptz updated_at
-    timestamptz finished_at
-  }
   subscriptions {
     uuid id PK
-    uuid user_id FK "one per user"
+    uuid user_id FK, UK "one per user"
     varchar paddle_customer_id
     varchar paddle_subscription_id UK
-    varchar status "Paddle subscription status"
-    varchar price_id "monthly or yearly price"
-    timestamptz current_period_end
-    timestamptz canceled_at
+    varchar status "trialing, active, past_due, paused or canceled"
+    varchar billing_period "MONTHLY or YEARLY"
+    varchar price_id "the Paddle price"
+    timestamptz trial_ends_at "null unless trialing"
+    timestamptz current_period_end "next payment"
+    timestamptz cancel_at "Hive lasts until then, null unless canceled"
+    varchar card_last4
+    varchar card_expiry "MM/YY"
     timestamptz last_event_at "skip older webhook events"
     timestamptz created_at
     timestamptz updated_at
   }
+  invoices {
+    uuid id PK
+    uuid user_id FK
+    varchar paddle_transaction_id UK
+    varchar status "PAID or FAILED"
+    int amount_cents
+    varchar currency "USD"
+    timestamptz billed_at
+    timestamptz created_at
+  }
+```
+
+- The Plan and billing section's states come from `subscriptions` (section 3).
+- `invoices` holds one row per Paddle transaction, for the invoice list and the "payment didn't go
+  through" notice. The invoice PDF is fetched from Paddle when asked for, not stored.
+
+### 1.3 Library: sources, saves and tags
+
+```mermaid
+erDiagram
+  users ||--o{ sources : reads
+  users ||--o{ saves : keeps
+  users ||--o{ tags : names
+  sources ||--o{ saves : "saved from"
+  saves ||--o{ save_tags : "tagged with"
+  tags ||--o{ save_tags : "used by"
+  sources {
+    uuid id PK
+    uuid user_id FK
+    varchar kind "WEBSITE or FILE"
+    varchar name "site name, or the file name"
+    varchar title "page or document title"
+    varchar author "optional"
+    text url "WEBSITE only, without the fragment"
+    tsvector search_vector "generated, F10"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  saves {
+    uuid id PK
+    uuid user_id FK
+    uuid source_id FK
+    varchar kind "HIGHLIGHT, CLIP or IMPORT"
+    varchar color "YELLOW, GREEN, BLUE, PINK or PURPLE, null for clips"
+    varchar clip_type "TABLE or IMAGE, CLIP only"
+    text text "the words, or a clip's plain text or caption"
+    text content_md "a clipped section as Markdown"
+    varchar image_key "a clipped image in storage"
+    text comment "empty when none"
+    varchar section "heading above it on a web page"
+    int page_number "page in a file"
+    tsvector search_vector "generated, F10"
+    timestamptz created_at "saved at, the Library groups by day"
+    timestamptz updated_at
+  }
+  tags {
+    uuid id PK
+    uuid user_id FK
+    varchar name "unique per user in any case"
+    timestamptz created_at
+  }
+  save_tags {
+    uuid save_id PK, FK
+    uuid tag_id PK, FK
+  }
+```
+
+- **Kinds:** `HIGHLIGHT` is marked text from a web page, `CLIP` a whole page section (a table as
+  Markdown, or an image), `IMPORT` a mark saved from an imported file. A handwritten mark saved
+  from a file becomes a `CLIP` with `clip_type = IMAGE`.
+- **Sources:** one row per web page (its URL is unique per user, so saving from the same page again
+  reuses it) and one per imported file. A source with no saves is hidden from the Sources page.
+  The Sources page uses the source's `id` in its address instead of a slug of its name.
+- **Open at this spot:** the frontend builds the link from `sources.url` and `saves.text` (a text
+  fragment), so no jump link is stored.
+- **Tags, not folders:** the Library filters by tags, colors and sources and has no folders. A tag
+  that no save uses any more is never listed, because the facets come from `save_tags`.
+
+### 1.4 Imports
+
+```mermaid
+erDiagram
+  users ||--o{ imports : uploads
+  imports |o--o| sources : becomes
+  imports ||--o{ import_marks : finds
+  import_marks |o--o| saves : "saved as"
+  imports {
+    uuid id PK
+    uuid user_id FK
+    uuid source_id FK, UK "the file's source, set when reading finishes"
+    varchar file_name
+    varchar content_type
+    bigint size_bytes "counts against upload space"
+    varchar storage_key "null once the file is deleted"
+    varchar status "QUEUED, READING, READY, SAVED, EMPTY, FAILED or DISCARDED"
+    int attempts "Retry reads it again"
+    varchar error_code "FAILED only"
+    timestamptz read_at "reading finished"
+    timestamptz reviewed_at "first review saved"
+    timestamptz dismissed_at "hidden from the Imports page"
+    timestamptz created_at
+    timestamptz updated_at
+  }
+  import_marks {
+    uuid id PK
+    uuid import_id FK
+    uuid save_id FK, UK "null until saved to the Library"
+    int position "order in the file"
+    varchar type "HIGHLIGHT, UNDERLINE, DRAWN, HANDWRITTEN, STRIKE or NOTE"
+    varchar color "one of the five save colors"
+    varchar file_color "the file's own color when it was mapped"
+    text text
+    int page_number
+    text comment "the file's comment on the mark"
+    varchar image_key "picture of the spot, DRAWN and HANDWRITTEN"
+    boolean selected "ticked in the review"
+    timestamptz created_at
+  }
+```
+
+```mermaid
+stateDiagram-v2
+  [*] --> QUEUED : upload
+  QUEUED --> READING : consumer takes it
+  READING --> READY : marks found
+  READING --> EMPTY : no marks
+  READING --> FAILED : error
+  FAILED --> READING : Retry
+  READY --> SAVED : review saved
+  READY --> DISCARDED : Discard
+  SAVED --> SAVED : review edited
+```
+
+- Uploading and rejected files stay in the browser: a file of the wrong type, too big or without
+  space left never reaches a table (400 `VALIDATION_FAILED`). Dismissing a `FAILED` or `EMPTY` file
+  sets `dismissed_at`.
+- When reading finishes, the file gets its `sources` row (`kind = FILE`) with the title and author
+  found in it, and its marks. The review edits that source; its tag and color go to the new saves.
+  Discard deletes the file, its marks and its source.
+- Saving the review turns every ticked mark without a save into a save and sets its `save_id`;
+  a saved mark that was unticked loses its save. Deleting a save in the Library sets the mark's
+  `save_id` to null, so the review shows it unticked. "Kept" on the Imports page is the count of
+  marks with a `save_id`.
+- The file is deleted from storage once reading succeeds, or when the import is discarded or
+  dismissed. Pictures of marks (`image_key`) stay, because saved handwritten marks show them.
+
+### 1.5 Notes
+
+```mermaid
+erDiagram
+  users ||--o{ notes : writes
+  notes ||--o{ note_blocks : "made of"
+  saves |o--o{ note_blocks : "quoted in"
+  notes {
+    uuid id PK
+    uuid user_id FK
+    varchar title "empty until named"
+    timestamptz created_at
+    timestamptz updated_at "last edit, orders the list"
+  }
+  note_blocks {
+    uuid id PK
+    uuid note_id FK
+    int position "order in the note"
+    varchar kind "TEXT or QUOTE"
+    text text "TEXT only"
+    uuid save_id FK "QUOTE only"
+  }
+```
+
+- A note is paragraphs with quotes of saves between them. A quote stores only `save_id`, so it shows
+  the save's current color and text.
+- Blocks are rows, not a `jsonb` array, so deleting a save removes its quotes through the foreign key
+  and "quoted in a note" on the Sources page is a join.
+- The editor saves as you type: one request replaces a note's blocks in a single transaction.
+  Markdown and PDF export of a note happen in the browser.
+
+### 1.6 Background jobs
+
+```mermaid
+erDiagram
   outbox_events {
     uuid id PK "also the event id"
     varchar aggregate_type "e.g. IMPORT"
@@ -102,46 +288,65 @@ erDiagram
     timestamptz sent_at "null until published"
   }
   processed_events {
-    varchar consumer PK "import.process or paddle"
+    varchar consumer PK "import.process, email.transactional or paddle"
     varchar event_id PK "outbox id or Paddle event id"
     timestamptz processed_at
   }
 ```
 
-`outbox_events` and `processed_events` stand alone: they point at other rows through their payload
-and ids, not through foreign keys.
-
 ## 2. Columns and constraints
 
 All ids are UUIDs created in code. All times are `timestamptz` in UTC, and `created_at` and
-`updated_at` default to `now()`.
+`updated_at` default to `now()`. Every table with a `user_id` deletes its rows with the user (FK
+`user_id` → `users.id` on delete cascade).
 
 | Table | Column details and constraints |
 |---|---|
-| `users` | `email varchar(320)` unique, always trimmed and lowercased in code. `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `password_hash varchar(100)` nullable. `full_name varchar(150)`. `birth_date date` nullable. `plan varchar(10)` default `FREE`, check `FREE`/`PRO`. `saves_count int` default 0, check `>= 0` |
-| `refresh_tokens` | FK `user_id` → `users.id` on delete cascade. `token_hash varchar(64)` unique. `client varchar(20)`, check `WEB`/`EXTENSION`. Indexes on `user_id` and `family_id`. The 10-second reuse grace counts from `revoked_at` and applies only while the family still has an active token |
-| `folders` | FK `user_id` → `users.id` on delete cascade. `name varchar(100)`, trimmed, unique `(user_id, lower(name))`. A folder's highlight count is a `COUNT(*)`, not a stored column |
-| `highlights` | FK `user_id` → `users.id` on delete cascade. FK `folder_id` → `folders.id` on delete set null. FK `import_id` → `imports.id` on delete set null. `kind varchar(10)`, check `TEXT`/`CLIP`/`FILE`/`IMAGE`. `text` not null (for `CLIP`, a plain-text copy for search). `source_title varchar(500)`, `source_site varchar(255)`, `file_name varchar(255)`, `page_number int` check `> 0`. Index `(user_id, created_at desc, id desc)` for cursor paging, index on `folder_id` |
-| `imports` | FK `user_id` → `users.id` on delete cascade. `file_name varchar(255)`, `content_type varchar(100)`, `storage_key varchar(512)`. `status varchar(12)` default `QUEUED`, check `QUEUED`/`PROCESSING`/`DONE`/`FAILED`. `highlights_count int` default 0. `error_code varchar(50)`. Index `(user_id, created_at desc)` |
-| `subscriptions` | FK `user_id` → `users.id` on delete cascade, unique. `paddle_customer_id varchar(50)`, `paddle_subscription_id varchar(50)` unique, `status varchar(20)`, `price_id varchar(50)` |
+| `users` | `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `email varchar(320)` nullable and unique (several users may have none). `password_hash varchar(100)` nullable. `full_name varchar(150)`. `birth_date date` nullable. `avatar_key varchar(512)` nullable. `plan varchar(10)` default `NONE`, check `NONE`/`HIVE`. `saves_count int` default 0, check `>= 0`, changed in the same transaction as every save insert and delete |
+| `refresh_tokens` | `token_hash varchar(64)` unique. `client varchar(20)`, check `WEB`/`EXTENSION`. Indexes on `user_id` and `family_id`. The 10-second reuse grace counts from `revoked_at` and applies only while the family still has an active token |
+| `subscriptions` | `user_id` unique. `paddle_customer_id varchar(50)`, `paddle_subscription_id varchar(50)` unique, `status varchar(20)`, `price_id varchar(50)`. `billing_period varchar(10)`, check `MONTHLY`/`YEARLY`. `card_last4 varchar(4)`, `card_expiry varchar(5)` |
+| `invoices` | `paddle_transaction_id varchar(50)` unique. `status varchar(10)`, check `PAID`/`FAILED`. `amount_cents int`, check `>= 0`. `currency varchar(3)`. Index `(user_id, billed_at desc)` |
+| `sources` | `kind varchar(10)`, check `WEBSITE`/`FILE`. `name varchar(255)`, `title varchar(500)`, `author varchar(255)` nullable. `url text`, required for `WEBSITE` and null for `FILE` (check). Unique `(user_id, url)` where `kind = 'WEBSITE'`. Index on `user_id` |
+| `saves` | FK `source_id` → `sources.id`, no cascade (a source goes only once it has no saves). `kind varchar(10)`, check `HIGHLIGHT`/`CLIP`/`IMPORT`. `color varchar(10)`, check the five colors, null exactly when `kind = 'CLIP'`. `clip_type varchar(10)`, check `TABLE`/`IMAGE`, set exactly when `kind = 'CLIP'`. `text` not null. `comment text` not null, default `''`. `section varchar(500)`, `page_number int` check `> 0`, `image_key varchar(512)`. Index `(user_id, created_at desc, id desc)` for cursor paging, index `(source_id, page_number, created_at)` for a source's page |
+| `tags` | `name varchar(50)`, trimmed, unique `(user_id, lower(name))` |
+| `save_tags` | Primary key `(save_id, tag_id)`. FK `save_id` → `saves.id` and FK `tag_id` → `tags.id`, both on delete cascade. Index on `tag_id` |
+| `imports` | FK `source_id` → `sources.id` on delete set null, unique. `file_name varchar(255)`, `content_type varchar(100)`, `size_bytes bigint` check `> 0`, `storage_key varchar(512)`. `status varchar(12)` default `QUEUED`, check the seven statuses. `attempts int` default 1. `error_code varchar(50)`. Index `(user_id, created_at desc)` |
+| `import_marks` | FK `import_id` → `imports.id` on delete cascade. FK `save_id` → `saves.id` on delete set null, unique. `type varchar(12)`, check the six types. `color varchar(10)`, check the five colors. `file_color varchar(20)` nullable. `text` not null. `page_number int` check `> 0`. `image_key varchar(512)`. `selected boolean` not null. Unique `(import_id, position)` |
+| `notes` | `title varchar(200)` not null, default `''`. Index `(user_id, updated_at desc)` |
+| `note_blocks` | FK `note_id` → `notes.id` on delete cascade. FK `save_id` → `saves.id` on delete cascade. `kind varchar(10)`, check `TEXT`/`QUOTE`. Check: a `TEXT` block has `text` and no `save_id`, a `QUOTE` block has `save_id` and no `text`. Unique `(note_id, position)`, index on `save_id` |
 | `outbox_events` | `aggregate_type varchar(50)`, `event_type varchar(100)`, `routing_key varchar(100)`, `payload jsonb` not null. Partial index on `created_at` where `sent_at is null`, for the publisher. A scheduled job deletes sent rows older than 7 days |
 | `processed_events` | Primary key `(consumer, event_id)`. `consumer varchar(50)`, `event_id varchar(100)`. A scheduled job deletes rows older than 30 days |
 
-Search (F10) adds to `highlights`:
+Search (F10) adds:
 
-- `search_vector tsvector` generated always from `text` and `source_title`, with the `simple`
-  config and an IMMUTABLE wrapper around `unaccent`, plus a GIN index on it.
-- `pg_trgm` and a GIN trigram index (`gin_trgm_ops`) on `text` for short or partial queries.
+- `saves.search_vector tsvector` generated always from `text`, `comment` and `section`, and
+  `sources.search_vector` from `name`, `title` and `author`, with the `simple` config and an
+  IMMUTABLE wrapper around `unaccent`, plus a GIN index on each.
+- `pg_trgm` and a GIN trigram index (`gin_trgm_ops`) on `saves.text` for short or partial queries.
 
-## 3. Plan and saves
+## 3. Plan and upload space
 
-- `users.plan` and `users.saves_count` decide the free limit; the JWT `plan` claim is never used for
-  it ([sequences §4](sequences.md#4-save-and-delete-a-highlight-free-limit-f3-f4)).
-- `saves_count` is the number of the user's highlights right now. It changes in the same transaction
-  as every insert and delete, so Free means at most 500 stored at once.
-- `subscriptions.status` drives `users.plan` in the same transaction: `active`, `trialing` and
-  `past_due` → `PRO`; `paused` and `canceled` → `FREE`
-  ([sequences §7](sequences.md#7-paddle-checkout-and-webhook-f15)).
+- There is one plan, Hive ($5 a month or $48 a year), with a 14-day free trial; there is no free
+  plan and no limit on saves. The trial is Paddle's: it starts once the user adds their card details
+  in Paddle checkout, and Hive is charged when it ends unless they cancel.
+- A new user starts with `users.plan = NONE`. It is `HIVE` while `subscriptions.status` is
+  `trialing`, `active` or `past_due`, and `NONE` otherwise: the user can still read and export
+  everything, but not save or import. Only the Paddle webhook changes it, in the same transaction as
+  the subscription ([sequences §7](sequences.md#7-paddle-checkout-and-webhook-f15)).
+- The frontend's plan states map onto `subscriptions`:
+
+  | Frontend state | Stored as |
+  |---|---|
+  | `trial` | `status = trialing` |
+  | `trialCanceled` | `trialing` with `cancel_at` set |
+  | `active` | `active` |
+  | `failed` | `past_due`, with a `FAILED` row in `invoices` |
+  | `canceled` | `active` with `cancel_at` set, then `canceled` once that day passes |
+
+- Upload space used is the sum of `imports.size_bytes` for imports in `QUEUED`, `READING`, `READY`
+  or `SAVED`. The trial gives 50 MB with at most 5 MB per file, Hive gives 1 GB. An upload checks it
+  with the user's row locked (`SELECT … FOR UPDATE`), so two uploads can't both take the last
+  megabytes.
 
 ## 4. Changesets
 
@@ -150,13 +355,13 @@ file; add a new one instead.
 
 | File | Feature |
 |---|---|
-| `001-create-users.yaml` | F1 (done) |
-| `002-create-oauth-accounts.yaml` | F9 (done, dropped by 004) |
-| `003-create-refresh-tokens.yaml` | F1 (done) |
-| `004-drop-oauth-accounts.yaml` | Google sign-in postponed (done) |
-| `005-create-folders.yaml` | F2 |
-| `006-create-imports.yaml` | F2 (`highlights` references it) |
-| `007-create-highlights.yaml` | F2 |
-| `008-add-highlight-search.yaml` | F10 |
+| `001-create-users.yaml` | F1 (done): every `users` column, including `avatar_key` and `plan` |
+| `002-create-refresh-tokens.yaml` | F1 (done) |
+| `003-create-sources.yaml` | F2 |
+| `004-create-saves.yaml` | F2, F3 |
+| `005-create-tags.yaml` | F2 (`tags` and `save_tags`) |
+| `006-create-imports.yaml` | F5 (`imports` and `import_marks`) |
+| `007-create-notes.yaml` | Notes, no issue yet (`notes` and `note_blocks`) |
+| `008-add-search.yaml` | F10 |
 | `009-create-outbox-and-processed-events.yaml` | F11 |
-| `010-create-subscriptions.yaml` | F15 |
+| `010-create-subscriptions-and-invoices.yaml` | F15 |

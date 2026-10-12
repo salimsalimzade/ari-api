@@ -16,7 +16,6 @@ databaseChangeLog:
                   name: email
                   type: varchar(320)
                   constraints:
-                    nullable: false
                     unique: true
                     uniqueConstraintName: users_email_key
               - column:
@@ -38,9 +37,12 @@ databaseChangeLog:
                   name: birth_date
                   type: date
               - column:
+                  name: avatar_key
+                  type: varchar(512)
+              - column:
                   name: plan
                   type: varchar(10)
-                  defaultValue: FREE
+                  defaultValue: NONE
                   constraints:
                     nullable: false
               - column:
@@ -69,7 +71,7 @@ databaseChangeLog:
               ALTER TABLE users
               ADD CONSTRAINT users_username_check
                 CHECK (username = lower(username) AND username ~ '^[a-z0-9_.]{3,30}$'),
-              ADD CONSTRAINT users_plan_check CHECK (plan IN ('FREE', 'PRO')),
+              ADD CONSTRAINT users_plan_check CHECK (plan IN ('NONE', 'HIVE')),
               ADD CONSTRAINT users_saves_count_check CHECK (saves_count >= 0)
       rollback:
         - dropTable:

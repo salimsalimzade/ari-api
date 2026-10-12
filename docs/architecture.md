@@ -69,19 +69,19 @@ Every value comes from an environment variable (locally from `.env`, see `.env.e
 | `APP_JWT_SECRET` | none (required) | HS256 key for access tokens, at least 32 characters (`openssl rand -base64 48`) |
 | `APP_COOKIE_SECURE` | `true` | `false` only for `http://localhost` |
 | `APP_COOKIE_DOMAIN` | blank | Shared parent domain in production; blank keeps cookies on the API host |
-| `APP_SEED_DEMO_DATA` | `false` | Adds `demo@example.com` / `demo1234`; local development and tests only |
+| `APP_SEED_DEMO_DATA` | `false` | Adds `demo` / `demo1234`; local development and tests only |
 
 ## 3. Sign-in rules
 
 | Rule | Value |
 |---|---|
-| Access cookie | `ari_access`: JWT, HS256, 15 minutes, claims `iss` (`ari-api`), `sub` (user id), `email`, `plan`. Cookie `Max-Age` 14 minutes, so a cookie the browser still sends never holds an expired JWT |
+| Access cookie | `ari_access`: JWT, HS256, 15 minutes, claims `iss` (`ari-api`), `sub` (user id), `plan`. Cookie `Max-Age` 14 minutes, so a cookie the browser still sends never holds an expired JWT |
 | Refresh cookie | `ari_refresh`: 32 random bytes, 30 days from the last refresh, replaced on every refresh |
 | Cookie flags | Both: `Path=/`, `HttpOnly`, `SameSite=Lax`, `Secure` outside local http, `Domain` = shared parent domain in production. `Path=/` lets the `ari` server send `ari_refresh` and refresh while rendering ([sequences §2](sequences.md#2-token-refresh-f1)) |
 | Reuse detection | A replaced refresh token used again within 10 seconds still gets a new pair, while its session has an active token (a server render and a browser call refreshing at once). Otherwise using it revokes its whole session. Logout stays final |
 | Refresh fails | 401 `UNAUTHORIZED`, and both cookies are cleared; only the API can delete httpOnly cookies |
 | Passwords | 8 characters to 72 bytes (bcrypt's limit), stored as bcrypt hashes |
-| Login answers | `INVALID_CREDENTIALS` for every failure, and unknown emails run a bcrypt check too, so neither the answer nor its timing reveals which emails exist |
+| Login answers | `INVALID_CREDENTIALS` for every failure, and unknown usernames run a bcrypt check too, so neither the answer nor its timing reveals which usernames exist |
 | Stored secrets | Only the SHA-256 hash of a refresh token |
 | Logout | `POST /api/v1/auth/logout` revokes the session and clears both cookies (always 204) |
 | Stale cookies | The sign-in endpoints (`/api/v1/auth/**`) ignore `ari_access`, so an old cookie never blocks signing in |
@@ -95,10 +95,9 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 |---|---|---|
 | `VALIDATION_FAILED` | 400 | Bad body, query or upload (file type or size) |
 | `UNAUTHORIZED` | 401 | Missing, expired or invalid token, sign-in code or webhook signature |
-| `INVALID_CREDENTIALS` | 401 | Wrong email or password |
+| `INVALID_CREDENTIALS` | 401 | Wrong username or password |
 | `LIMIT_REACHED` | 403 | A Free user already stores 500 highlights |
 | `NOT_FOUND` | 404 | The item does not exist or belongs to another user |
-| `EMAIL_TAKEN` | 409 | Register with an email that is already used |
 | `USERNAME_TAKEN` | 409 | Register with a username that is already used |
 
 ## 5. How it is built
@@ -141,7 +140,7 @@ first real module; copy its patterns.
 `./gradlew check` runs them against a PostgreSQL 18 container (Testcontainers; Docker must be
 running):
 
-- `AccountControllerTest`: register and login set both cookies with their flags; a taken email in
+- `AccountControllerTest`: register and login set both cookies with their flags; a taken username in
   any case is 409; bad input and passwords over 72 bytes are 400; `/me` works with the cookie or a
   Bearer header and is 401 without one or after 15 minutes; refresh rotates; a replaced token works
   for 10 seconds and then revokes its session; logout clears the cookies and ends the session; a

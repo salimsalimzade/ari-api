@@ -28,7 +28,7 @@ class AriApiApplicationTests {
             jdbc.queryForList(
                 "SELECT table_name FROM information_schema.tables"
                     + " WHERE table_schema = 'public'"
-                    + " AND table_name IN ('users', 'oauth_accounts', 'refresh_tokens')"
+                    + " AND table_name IN ('users', 'refresh_tokens')"
                     + " ORDER BY table_name",
                 String.class))
         .containsExactly("refresh_tokens", "users");

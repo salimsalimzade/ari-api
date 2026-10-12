@@ -5,8 +5,9 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 /**
- * Someone who can sign in. {@code email} and {@code username} are trimmed and lowercase; {@code
- * emailVerifiedAt} is null until the email is proven.
+ * Someone who can sign in. {@code username} is trimmed and lowercase and is what people sign in
+ * with; {@code email} is optional and null until it is added, and {@code emailVerifiedAt} is null
+ * until it is proven.
  */
 public record User(
     UUID id,

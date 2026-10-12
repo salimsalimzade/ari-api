@@ -27,7 +27,7 @@ The finished MVP lets users:
 2. Clip a whole page section (tables, code, lists) with its formatting.
 3. Pull highlights out of PDF, Word and image files.
 4. Browse, search, move, delete and export everything as Markdown, organized in folders.
-5. Use it free up to 500 saves, or pay for Pro.
+5. Try everything free for 14 days once a card is added, then pay for Hive (the only plan).
 
 The library and import endpoints in section 5 come next, one feature at a time, each with its own
 tables.
@@ -133,7 +133,7 @@ Rules:
   (`@Tag`, `@Operation`); `impl/XControllerImpl` is the `@RestController` and only calls the facade.
 - **Facade:** orchestrates one use case and maps DTOs with MapStruct. No business rules here.
 - **Service:** business rules. It talks only to the repository ports of its own feature, and
-  returns `Optional` or `boolean` for "not possible" (email taken, wrong password).
+  returns `Optional` or `boolean` for "not possible" (username taken, wrong password).
 - **Infrastructure:** adapters that implement the ports. A MyBatis adapter is a `@Mapper` interface
   that extends the port, with its SQL in `resources/persistence/<Name>.xml`; rows map into the
   domain records by constructor argument name. Unique keys guard data: inserts use
@@ -143,7 +143,7 @@ Rules:
   classes in `common/exception` (`NotFoundException`, `BadRequestException`,
   `UnauthorizedException`, `ConflictException`) and sit in folders by type. `GlobalExceptionHandler`
   turns them into RFC 9457 Problem Details with a stable `code` (`NOT_FOUND`, `VALIDATION_FAILED`,
-  `EMAIL_TAKEN`).
+  `USERNAME_TAKEN`).
 - **Transactions:** `@Transactional` on facade use cases, so a use case saves all or nothing.
 - **Between features:** call the other feature's facade; never use its domain or infrastructure.
   `ArchitectureTest` (ArchUnit) checks this and the layer directions: presentation → application →
@@ -170,7 +170,7 @@ frontend repo mirrors this contract, so keep `/v3/api-docs` accurate: the fronte
 its client from it later.
 
 ```java
-public record MeResponse(UUID id, String email, String username, String fullName, LocalDate birthDate, Plan plan, int savesCount, int savesLimit) {}
+public record MeResponse(UUID id, String username, String fullName, LocalDate birthDate, Plan plan, int savesCount) {}
 public record FolderResponse(UUID id, String name, int highlightsCount) {}
 public record HighlightResponse(
     UUID id, UUID folderId, HighlightKind kind,
@@ -181,18 +181,18 @@ public record HighlightResponse(
 public record ImportJobResponse(UUID id, String fileName, ImportStatus status, int highlightsCount) {}
 public record PageResponse<T>(List<T> items, String nextCursor) {}
 
-enum Plan { FREE, PRO }
+enum Plan { NONE, HIVE }
 enum HighlightKind { TEXT, CLIP, FILE, IMAGE }
 enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 ```
 
 | Endpoint | Feature | Behavior |
 |---|---|---|
-| `POST /auth/register` `{ email, username, password, fullName, birthDate }` | `account` | 201 + `MeResponse` + both cookies; 409 `EMAIL_TAKEN` or `USERNAME_TAKEN` |
-| `POST /auth/login` `{ email, password }` | `account` | 200 + `MeResponse` + both cookies; 401 `INVALID_CREDENTIALS` |
+| `POST /auth/register` `{ username, password, fullName, birthDate }` | `account` | 201 + `MeResponse` + both cookies; 409 `USERNAME_TAKEN` |
+| `POST /auth/login` `{ username, password }` | `account` | 200 + `MeResponse` + both cookies; 401 `INVALID_CREDENTIALS` |
 | `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears both |
 | `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears both cookies |
-| `GET /me` | `account` | The signed-in user (plan `FREE`, `savesLimit` 500); 401 when signed out |
+| `GET /me` | `account` | The signed-in user (plan `NONE` until the trial starts, `savesCount` for the sidebar); 401 when signed out |
 | `GET /folders` | `folder` | Seeded folders, e.g. "Spring Boot" and "Thesis" |
 | `POST /folders` `{ name }` | `folder` | Adds a folder in memory |
 | `GET /highlights?folderId=&q=&cursor=` | `highlight` | Filters the in-memory list (case-insensitive match on text and title), 50 per page |
@@ -361,7 +361,7 @@ Later, add `redis`, `rabbitmq`, `seaweedfs` and `mailpit` services here as their
   `feature/account` (MyBatis adapter, Liquibase changeset, exceptions, `@IntegrationTest`).
 - Tests that need the database use `@IntegrationTest` (`src/test/java/app/ari/api/support`): one
   shared Spring context on a PostgreSQL container, so give every test its own data (for example a
-  random email).
+  random username).
 - Create folders when their first code arrives. Each feature folder holds only
   `package-info.java` until its issue starts.
 - Any change to an endpoint or response shape must be reflected in `/v3/api-docs` and called out,
@@ -397,11 +397,11 @@ Do these in order, one at a time:
    with its XML mapper in `resources/persistence/HighlightMyBatisRepository.xml`. TypeHandlers in
    `common/handlers` store `Instant` as UTC. Migrations in `resources/db/changelog/`: a master file
    plus numbered files in `v1/`; never edit an applied file. No in-memory or `mock` mode: the
-   frontend runs PostgreSQL with docker compose. Keep a `users.saves_count` counter for the plan
-   limit. Each library feature adds its own tables (see `docs/database.md`).
+   frontend runs PostgreSQL with docker compose. Keep a `users.saves_count` counter for the
+   Library count in the sidebar. Each library feature adds its own tables (see `docs/database.md`).
 2. **Auth (done, F1):** Spring Security; our own JWT access tokens (15 minutes) plus rotating
-   refresh tokens (httpOnly cookies for the website); email +
-   password with bcrypt. Google sign-in (F9) is postponed. Rules in `docs/architecture.md`.
+   refresh tokens (httpOnly cookies for the website); username +
+   password with bcrypt (email is optional and comes later, for password changes). Google sign-in (F9) is postponed. Rules in `docs/architecture.md`.
 3. **Search:** Postgres full-text search: a generated `tsvector` column with the `simple` config, an
    IMMUTABLE wrapper around `unaccent`, a GIN index, and `pg_trgm` for short or partial queries.
    Added as a Liquibase changeset.
@@ -417,8 +417,10 @@ Do these in order, one at a time:
    Queues: `import.process`, `email.transactional`, `email.bulk`.
 6. **Redis:** rate limits, one-time codes (including the browser extension's sign-in code) and
    idempotency keys only.
-7. **Billing:** Paddle Billing webhooks. Free = 500 saves; Pro = unlimited, $6/month or $48/year, the
-   same price everywhere. Verify webhook signatures and ignore duplicate events.
+7. **Billing:** Paddle Billing webhooks. One plan, Hive: $5/month or $48/year, the same price
+   everywhere, with a 14-day free trial that starts once the user adds their card in Paddle checkout.
+   No free plan and no save limit; `users.plan` is `NONE` until the trial starts. Verify webhook
+   signatures and ignore duplicate events.
 8. **API contract for the frontend:** keep springdoc's OpenAPI complete (every endpoint, field and
    error code), since the frontend generates its typed client from `/v3/api-docs`.
 9. **Native image (optional):** compile ari-api to a GraalVM native executable with the

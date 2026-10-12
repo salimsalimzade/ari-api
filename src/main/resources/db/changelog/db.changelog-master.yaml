@@ -4,11 +4,5 @@ databaseChangeLog:
       file: v1/001-create-users.yaml
       relativeToChangelogFile: true
   - include:
-      file: v1/002-create-oauth-accounts.yaml
-      relativeToChangelogFile: true
-  - include:
-      file: v1/003-create-refresh-tokens.yaml
-      relativeToChangelogFile: true
-  - include:
-      file: v1/004-drop-oauth-accounts.yaml
+      file: v1/002-create-refresh-tokens.yaml
       relativeToChangelogFile: true

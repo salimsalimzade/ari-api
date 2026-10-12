@@ -30,14 +30,14 @@ class AccountControllerTest {
 
   @Test
   void registerCreatesTheAccountAndSignsItIn() {
-    String email = newEmail();
+    String username = newUsername();
 
-    MvcTestResult result = register(email.toUpperCase(Locale.ROOT), PASSWORD);
+    MvcTestResult result = register(username.toUpperCase(Locale.ROOT), PASSWORD);
 
     assertThat(result).hasStatus(HttpStatus.CREATED);
-    assertThat(result).bodyJson().extractingPath("$.email").isEqualTo(email);
-    assertThat(result).bodyJson().extractingPath("$.plan").isEqualTo("FREE");
-    assertThat(result).bodyJson().extractingPath("$.savesLimit").isEqualTo(500);
+    assertThat(result).bodyJson().extractingPath("$.username").isEqualTo(username);
+    assertThat(result).bodyJson().doesNotHavePath("$.email");
+    assertThat(result).bodyJson().extractingPath("$.plan").isEqualTo("NONE");
     assertThat(result)
         .cookies()
         .isHttpOnly(ACCESS, true)
@@ -51,17 +51,6 @@ class AccountControllerTest {
   }
 
   @Test
-  void registerRejectsATakenEmailInAnyCase() {
-    String email = newEmail();
-    register(email, PASSWORD);
-
-    MvcTestResult result = register(email.toUpperCase(Locale.ROOT), PASSWORD);
-
-    assertThat(result).hasStatus(HttpStatus.CONFLICT);
-    assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("EMAIL_TAKEN");
-  }
-
-  @Test
   void registerValidatesTheBody() {
     MvcTestResult result =
         mvc.post()
@@ -69,7 +58,7 @@ class AccountControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"email": "not-an-email", "username": "a b", "password": "short",
+                {"username": "a b", "password": "short",
                  "fullName": "", "birthDate": "2999-01-01"}
                 """)
             .exchange();
@@ -80,7 +69,7 @@ class AccountControllerTest {
         .bodyJson()
         .extractingPath("$.errors[*].field")
         .asArray()
-        .contains("email", "username", "password", "fullName", "birthDate");
+        .contains("username", "password", "fullName", "birthDate");
   }
 
   @Test
@@ -91,9 +80,9 @@ class AccountControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"email": "%s", "username": "%s", "password": "%s", "fullName": "Test User"}
+                {"username": "%s", "password": "%s", "fullName": "Test User"}
                 """
-                    .formatted(newEmail(), newUsername(), PASSWORD))
+                    .formatted(newUsername(), PASSWORD))
             .exchange();
 
     assertThat(result).hasStatus(HttpStatus.BAD_REQUEST);
@@ -104,7 +93,7 @@ class AccountControllerTest {
   void registerStoresTheUsernameInLowercaseAndReturnsTheProfile() {
     String username = "Ada.Lovelace" + UUID.randomUUID().toString().substring(0, 4);
 
-    MvcTestResult result = register(newEmail(), username, PASSWORD);
+    MvcTestResult result = register(username, PASSWORD);
 
     assertThat(result).hasStatus(HttpStatus.CREATED);
     assertThat(result)
@@ -118,9 +107,9 @@ class AccountControllerTest {
   @Test
   void registerRejectsATakenUsernameInAnyCase() {
     String username = newUsername();
-    register(newEmail(), username, PASSWORD);
+    register(username, PASSWORD);
 
-    MvcTestResult result = register(newEmail(), username.toUpperCase(Locale.ROOT), PASSWORD);
+    MvcTestResult result = register(username.toUpperCase(Locale.ROOT), PASSWORD);
 
     assertThat(result).hasStatus(HttpStatus.CONFLICT);
     assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("USERNAME_TAKEN");
@@ -129,7 +118,7 @@ class AccountControllerTest {
   @Test
   void registerRejectsPasswordsLongerThanBcryptAccepts() {
     // 25 characters but 75 bytes: bcrypt only takes 72.
-    MvcTestResult result = register(newEmail(), "€".repeat(25));
+    MvcTestResult result = register(newUsername(), "€".repeat(25));
 
     assertThat(result).hasStatus(HttpStatus.BAD_REQUEST);
     assertThat(result).bodyJson().extractingPath("$.errors[0].field").isEqualTo("password");
@@ -137,7 +126,7 @@ class AccountControllerTest {
 
   @Test
   void loginWorksForTheDemoUser() {
-    MvcTestResult result = login("demo@example.com", "demo1234");
+    MvcTestResult result = login("demo", "demo1234");
 
     assertThat(result).hasStatusOk();
     assertThat(result).bodyJson().extractingPath("$.fullName").isEqualTo("Demo User");
@@ -146,12 +135,12 @@ class AccountControllerTest {
   }
 
   @Test
-  void loginAnswersTheSameForWrongPasswordAndUnknownEmail() {
-    String email = newEmail();
-    register(email, PASSWORD);
+  void loginAnswersTheSameForWrongPasswordAndUnknownUsername() {
+    String username = newUsername();
+    register(username, PASSWORD);
 
     for (MvcTestResult result :
-        new MvcTestResult[] {login(email, "wrong password"), login(newEmail(), PASSWORD)}) {
+        new MvcTestResult[] {login(username, "wrong password"), login(newUsername(), PASSWORD)}) {
       assertThat(result).hasStatus(HttpStatus.UNAUTHORIZED);
       assertThat(result).bodyJson().extractingPath("$.code").isEqualTo("INVALID_CREDENTIALS");
       assertThat(result).cookies().doesNotContainCookie(ACCESS);
@@ -160,20 +149,20 @@ class AccountControllerTest {
 
   @Test
   void meReturnsTheSignedInUserFromTheCookieOrTheBearerHeader() {
-    String email = newEmail();
-    String accessToken = cookie(register(email, PASSWORD), ACCESS);
+    String username = newUsername();
+    String accessToken = cookie(register(username, PASSWORD), ACCESS);
 
     assertThat(mvc.get().uri("/api/v1/me").cookie(new Cookie(ACCESS, accessToken)))
         .hasStatusOk()
         .bodyJson()
-        .extractingPath("$.email")
-        .isEqualTo(email);
+        .extractingPath("$.username")
+        .isEqualTo(username);
     assertThat(
             mvc.get().uri("/api/v1/me").header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken))
         .hasStatusOk()
         .bodyJson()
-        .extractingPath("$.email")
-        .isEqualTo(email);
+        .extractingPath("$.username")
+        .isEqualTo(username);
   }
 
   @Test
@@ -191,7 +180,7 @@ class AccountControllerTest {
 
   @Test
   void accessTokensExpire() {
-    String accessToken = cookie(register(newEmail(), PASSWORD), ACCESS);
+    String accessToken = cookie(register(newUsername(), PASSWORD), ACCESS);
 
     clock.advance(Duration.ofMinutes(17)); // 15 minutes plus the decoder's 1 minute of clock skew
 
@@ -201,9 +190,9 @@ class AccountControllerTest {
 
   @Test
   void meClearsTheCookiesWhenTheUserIsGone() {
-    String email = newEmail();
-    String accessToken = cookie(register(email, PASSWORD), ACCESS);
-    jdbc.update("DELETE FROM users WHERE email = ?", email);
+    String username = newUsername();
+    String accessToken = cookie(register(username, PASSWORD), ACCESS);
+    jdbc.update("DELETE FROM users WHERE username = ?", username);
 
     MvcTestResult result =
         mvc.get().uri("/api/v1/me").cookie(new Cookie(ACCESS, accessToken)).exchange();
@@ -214,7 +203,7 @@ class AccountControllerTest {
 
   @Test
   void refreshReplacesBothTokens() {
-    MvcTestResult signedIn = register(newEmail(), PASSWORD);
+    MvcTestResult signedIn = register(newUsername(), PASSWORD);
     String oldRefresh = cookie(signedIn, REFRESH);
 
     MvcTestResult result = refresh(oldRefresh);
@@ -227,7 +216,7 @@ class AccountControllerTest {
 
   @Test
   void aReplacedRefreshTokenWorksForTenSecondsThenEndsTheSession() {
-    String first = cookie(register(newEmail(), PASSWORD), REFRESH);
+    String first = cookie(register(newUsername(), PASSWORD), REFRESH);
     String second = cookie(refresh(first), REFRESH);
 
     clock.advance(Duration.ofSeconds(5));
@@ -257,7 +246,7 @@ class AccountControllerTest {
 
   @Test
   void logoutEndsTheSessionAndClearsTheCookies() {
-    String refreshToken = cookie(register(newEmail(), PASSWORD), REFRESH);
+    String refreshToken = cookie(register(newUsername(), PASSWORD), REFRESH);
 
     MvcTestResult result =
         mvc.post().uri("/api/v1/auth/logout").cookie(new Cookie(REFRESH, refreshToken)).exchange();
@@ -276,7 +265,7 @@ class AccountControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"email": "demo@example.com", "password": "demo1234"}
+                {"username": "demo", "password": "demo1234"}
                 """)
             .exchange();
 
@@ -296,32 +285,28 @@ class AccountControllerTest {
         .hasValue(HttpHeaders.ACCESS_CONTROL_ALLOW_CREDENTIALS, "true");
   }
 
-  private MvcTestResult register(String email, String password) {
-    return register(email, newUsername(), password);
-  }
-
-  private MvcTestResult register(String email, String username, String password) {
+  private MvcTestResult register(String username, String password) {
     return mvc.post()
         .uri("/api/v1/auth/register")
         .contentType(MediaType.APPLICATION_JSON)
         .content(
             """
-            {"email": "%s", "username": "%s", "password": "%s", "fullName": "Test User",
+            {"username": "%s", "password": "%s", "fullName": "Test User",
              "birthDate": "1990-05-17"}
             """
-                .formatted(email, username, password))
+                .formatted(username, password))
         .exchange();
   }
 
-  private MvcTestResult login(String email, String password) {
+  private MvcTestResult login(String username, String password) {
     return mvc.post()
         .uri("/api/v1/auth/login")
         .contentType(MediaType.APPLICATION_JSON)
         .content(
             """
-            {"email": "%s", "password": "%s"}
+            {"username": "%s", "password": "%s"}
             """
-                .formatted(email, password))
+                .formatted(username, password))
         .exchange();
   }
 
@@ -340,9 +325,5 @@ class AccountControllerTest {
 
   private static String newUsername() {
     return "user_" + UUID.randomUUID().toString().replace("-", "").substring(0, 20);
-  }
-
-  private static String newEmail() {
-    return "user-" + UUID.randomUUID() + "@example.com";
   }
 }

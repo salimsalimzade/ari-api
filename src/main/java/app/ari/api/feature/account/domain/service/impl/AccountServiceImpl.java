@@ -20,7 +20,9 @@ public class AccountServiceImpl implements AccountService {
   private final PasswordEncoder passwordEncoder;
   private final Clock clock;
 
-  /** Checked when a user has no password, so unknown emails answer as slowly as wrong passwords. */
+  /**
+   * Checked when a user has no password, so unknown usernames answer as slowly as wrong passwords.
+   */
   private final String dummyPasswordHash;
 
   public AccountServiceImpl(UserRepository users, PasswordEncoder passwordEncoder, Clock clock) {
@@ -32,17 +34,17 @@ public class AccountServiceImpl implements AccountService {
 
   @Override
   public Optional<User> register(
-      String email, String username, String password, String fullName, LocalDate birthDate) {
+      String username, String password, String fullName, LocalDate birthDate) {
     Instant now = clock.instant();
     User user =
         new User(
             UUID.randomUUID(),
-            normalizeEmail(email),
+            null,
             normalizeUsername(username),
             passwordEncoder.encode(password),
             fullName.strip(),
             birthDate,
-            Plan.FREE,
+            Plan.NONE,
             0,
             null,
             now,
@@ -51,13 +53,8 @@ public class AccountServiceImpl implements AccountService {
   }
 
   @Override
-  public boolean usernameTaken(String username) {
-    return users.existsByUsername(normalizeUsername(username));
-  }
-
-  @Override
-  public Optional<User> authenticate(String email, String password) {
-    Optional<User> user = users.findByEmail(normalizeEmail(email));
+  public Optional<User> authenticate(String username, String password) {
+    Optional<User> user = users.findByUsername(normalizeUsername(username));
     String hash = user.map(User::passwordHash).orElse(null);
     boolean matches = passwordEncoder.matches(password, hash != null ? hash : dummyPasswordHash);
     return matches && hash != null ? user : Optional.empty();
@@ -66,10 +63,6 @@ public class AccountServiceImpl implements AccountService {
   @Override
   public Optional<User> findById(UUID id) {
     return users.findById(id);
-  }
-
-  private static String normalizeEmail(String email) {
-    return email.strip().toLowerCase(Locale.ROOT);
   }
 
   private static String normalizeUsername(String username) {

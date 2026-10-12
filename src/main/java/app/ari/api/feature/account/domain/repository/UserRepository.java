@@ -9,16 +9,10 @@ public interface UserRepository {
 
   Optional<User> findById(UUID id);
 
-  /** Looks up a normalized (trimmed, lowercase) email. */
-  Optional<User> findByEmail(String email);
+  /** Looks up a normalized (trimmed, lowercase) username. */
+  Optional<User> findByUsername(String username);
 
-  /** Whether a normalized (trimmed, lowercase) username is already used. */
-  boolean existsByUsername(String username);
-
-  /**
-   * Adds the user; returns false and changes nothing when the email or the username is already
-   * taken.
-   */
+  /** Adds the user; returns false and changes nothing when the username is already taken. */
   boolean insert(User user);
 
   void update(User user);

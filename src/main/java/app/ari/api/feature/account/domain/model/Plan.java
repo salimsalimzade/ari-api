@@ -1,18 +1,9 @@
 package app.ari.api.feature.account.domain.model;
 
-/** A user's billing plan and how many highlights it can store at once. */
+/** A user's plan. There is one plan, Hive, with a free trial; there is no free plan. */
 public enum Plan {
-  FREE(500),
-  /** No practical limit; billing (F15) decides how the API shows it. */
-  PRO(Integer.MAX_VALUE);
-
-  private final int savesLimit;
-
-  Plan(int savesLimit) {
-    this.savesLimit = savesLimit;
-  }
-
-  public int savesLimit() {
-    return savesLimit;
-  }
+  /** No subscription yet, or it ended: the user can read and export, but not save or import. */
+  NONE,
+  /** The Paddle subscription is trialing, active or past due. */
+  HIVE
 }

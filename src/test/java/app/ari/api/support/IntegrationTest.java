@@ -12,7 +12,7 @@ import org.springframework.test.context.ActiveProfiles;
 
 /**
  * The whole app on a PostgreSQL test container, called through MockMvc. Test classes with this
- * annotation share one Spring context and one database, so each test uses its own emails.
+ * annotation share one Spring context and one database, so each test uses its own usernames.
  */
 @Target(ElementType.TYPE)
 @Retention(RetentionPolicy.RUNTIME)
