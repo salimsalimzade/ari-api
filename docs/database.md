@@ -1,10 +1,11 @@
 # Ari database
 
-Last updated 2026-10-12. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
+Last updated 2026-10-13. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
 queries with MyBatis. The tables follow what the ari frontend shows: the Library, Sources, Imports,
 Notes and Settings pages, which run on sample data in the page until these tables exist. The
 sign-in tables (`users`, `refresh_tokens`) exist since F1; every other table arrives with the
-feature that first uses it. The flows that use these tables are in [sequences.md](sequences.md).
+feature that first uses it. The flows that use these tables are in [sequences.md](sequences.md),
+and every table with all its columns is in one diagram in [database-erd.md](database-erd.md).
 
 ## 1. Tables and relations
 
@@ -37,8 +38,8 @@ Where each screen of the frontend gets its data:
 
 | Screen (ari) | Tables |
 |---|---|
-| Register, log in, the user in the sidebar | `users`, `refresh_tokens` |
-| Settings › Account: photo, profile, email | `users` (`avatar_key`, `email`, `email_verified_at`); the email's verify code lives in Redis |
+| Register, log in, the user in the sidebar | `users`, `refresh_tokens`; the username check asks the Redis Bloom filter first |
+| Settings › Account: photo, profile, email | `users` (`avatar_key`, `email`, `pending_email`); the email's verify code lives in Redis |
 | Settings › Plan and billing | `subscriptions`, `invoices`; upload space is summed from `imports` |
 | Library: list, grid, type tabs, tag / color / source filters, reading view | `saves`, `sources`, `tags`, `save_tags` |
 | Sources and a source's page | `sources`, with counts, colors and "quoted in a note" computed from `saves` and `note_blocks` |
@@ -57,15 +58,16 @@ erDiagram
   users ||--o{ invoices : "is billed"
   users {
     uuid id PK
-    varchar email UK "optional, null until added"
+    varchar email UK "verified address only, stored lowercase"
+    varchar pending_email "waiting for its link, not unique"
     varchar username UK "stored lowercase, 3-30 chars"
     varchar password_hash "bcrypt"
     varchar full_name
     date birth_date
-    varchar avatar_key "profile photo in storage, null shows the initial"
+    varchar avatar_key "profile photo in MinIO, null shows the initial"
     varchar plan "NONE until the trial starts, then follows subscriptions"
     int saves_count "the Library count in the sidebar"
-    timestamptz email_verified_at "null until the link is opened"
+    timestamptz email_verified_at "when email was verified"
     timestamptz created_at
     timestamptz updated_at
   }
@@ -143,7 +145,7 @@ erDiagram
     varchar clip_type "TABLE or IMAGE, CLIP only"
     text text "the words, or a clip's plain text or caption"
     text content_md "a clipped section as Markdown"
-    varchar image_key "a clipped image in storage"
+    varchar image_key "a clipped image in MinIO"
     text comment "empty when none"
     varchar section "heading above it on a web page"
     int page_number "page in a file"
@@ -239,7 +241,7 @@ stateDiagram-v2
   a saved mark that was unticked loses its save. Deleting a save in the Library sets the mark's
   `save_id` to null, so the review shows it unticked. "Kept" on the Imports page is the count of
   marks with a `save_id`.
-- The file is deleted from storage once reading succeeds, or when the import is discarded or
+- The file is deleted from MinIO once reading succeeds, or when the import is discarded or
   dismissed. Pictures of marks (`image_key`) stay, because saved handwritten marks show them.
 
 ### 1.5 Notes
@@ -288,7 +290,7 @@ erDiagram
     timestamptz sent_at "null until published"
   }
   processed_events {
-    varchar consumer PK "import.process, email.transactional or paddle"
+    varchar consumer PK "import.process or paddle"
     varchar event_id PK "outbox id or Paddle event id"
     timestamptz processed_at
   }
@@ -302,13 +304,13 @@ All ids are UUIDs created in code. All times are `timestamptz` in UTC, and `crea
 
 | Table | Column details and constraints |
 |---|---|
-| `users` | `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `email varchar(320)` nullable and unique (several users may have none). `password_hash varchar(100)` nullable. `full_name varchar(150)`. `birth_date date` nullable. `avatar_key varchar(512)` nullable. `plan varchar(10)` default `NONE`, check `NONE`/`HIVE`. `saves_count int` default 0, check `>= 0`, changed in the same transaction as every save insert and delete |
+| `users` | `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `email varchar(320)` nullable, a verified address only, stored lowercase, unique (several users may have none). `pending_email varchar(320)` nullable, not unique, so nobody can block an address by adding it and never confirming it. `password_hash varchar(100)` nullable. `full_name varchar(150)`. `birth_date date` nullable. `avatar_key varchar(512)` nullable. `plan varchar(10)` default `NONE`, check `NONE`/`HIVE`. `saves_count int` default 0, check `>= 0`, changed in the same transaction as every save insert and delete |
 | `refresh_tokens` | `token_hash varchar(64)` unique. `client varchar(20)`, check `WEB`/`EXTENSION`. Indexes on `user_id` and `family_id`. The 10-second reuse grace counts from `revoked_at` and applies only while the family still has an active token |
 | `subscriptions` | `user_id` unique. `paddle_customer_id varchar(50)`, `paddle_subscription_id varchar(50)` unique, `status varchar(20)`, `price_id varchar(50)`. `billing_period varchar(10)`, check `MONTHLY`/`YEARLY`. `card_last4 varchar(4)`, `card_expiry varchar(5)` |
 | `invoices` | `paddle_transaction_id varchar(50)` unique. `status varchar(10)`, check `PAID`/`FAILED`. `amount_cents int`, check `>= 0`. `currency varchar(3)`. Index `(user_id, billed_at desc)` |
 | `sources` | `kind varchar(10)`, check `WEBSITE`/`FILE`. `name varchar(255)`, `title varchar(500)`, `author varchar(255)` nullable. `url text`, required for `WEBSITE` and null for `FILE` (check). Unique `(user_id, url)` where `kind = 'WEBSITE'`. Index on `user_id` |
-| `saves` | FK `source_id` → `sources.id`, no cascade (a source goes only once it has no saves). `kind varchar(10)`, check `HIGHLIGHT`/`CLIP`/`IMPORT`. `color varchar(10)`, check the five colors, null exactly when `kind = 'CLIP'`. `clip_type varchar(10)`, check `TABLE`/`IMAGE`, set exactly when `kind = 'CLIP'`. `text` not null. `comment text` not null, default `''`. `section varchar(500)`, `page_number int` check `> 0`, `image_key varchar(512)`. Index `(user_id, created_at desc, id desc)` for cursor paging, index `(source_id, page_number, created_at)` for a source's page |
-| `tags` | `name varchar(50)`, trimmed, unique `(user_id, lower(name))` |
+| `saves` | FK `source_id` → `sources.id`, no cascade; deleting a save never deletes its source, so an unused source stays and is hidden from the Sources page. `kind varchar(10)`, check `HIGHLIGHT`/`CLIP`/`IMPORT`. `color varchar(10)`, check the five colors, null exactly when `kind = 'CLIP'`. `clip_type varchar(10)`, check `TABLE`/`IMAGE`, set exactly when `kind = 'CLIP'`. `text` not null. `content_md text`, set exactly when `clip_type = 'TABLE'` (check). `image_key varchar(512)`, set exactly when `clip_type = 'IMAGE'` (check). `comment text` not null, default `''`. `section varchar(500)`, `page_number int` check `> 0`. Index `(user_id, created_at desc, id desc)` for cursor paging, index `(source_id, page_number, created_at)` for a source's page |
+| `tags` | `name varchar(50)`, check trimmed and not empty, unique `(user_id, lower(name))`: "Swarm" and "swarm" are one tag and the first spelling stays |
 | `save_tags` | Primary key `(save_id, tag_id)`. FK `save_id` → `saves.id` and FK `tag_id` → `tags.id`, both on delete cascade. Index on `tag_id` |
 | `imports` | FK `source_id` → `sources.id` on delete set null, unique. `file_name varchar(255)`, `content_type varchar(100)`, `size_bytes bigint` check `> 0`, `storage_key varchar(512)`. `status varchar(12)` default `QUEUED`, check the seven statuses. `attempts int` default 1. `error_code varchar(50)`. Index `(user_id, created_at desc)` |
 | `import_marks` | FK `import_id` → `imports.id` on delete cascade. FK `save_id` → `saves.id` on delete set null, unique. `type varchar(12)`, check the six types. `color varchar(10)`, check the five colors. `file_color varchar(20)` nullable. `text` not null. `page_number int` check `> 0`. `image_key varchar(512)`. `selected boolean` not null. Unique `(import_id, position)` |
@@ -355,13 +357,71 @@ file; add a new one instead.
 
 | File | Feature |
 |---|---|
-| `001-create-users.yaml` | F1 (done): every `users` column, including `avatar_key` and `plan` |
+| `001-create-users.yaml` | F1 (done): every `users` column, including `pending_email`, `avatar_key` and `plan` |
 | `002-create-refresh-tokens.yaml` | F1 (done) |
-| `003-create-sources.yaml` | F2 |
-| `004-create-saves.yaml` | F2, F3 |
-| `005-create-tags.yaml` | F2 (`tags` and `save_tags`) |
-| `006-create-imports.yaml` | F5 (`imports` and `import_marks`) |
-| `007-create-notes.yaml` | Notes, no issue yet (`notes` and `note_blocks`) |
-| `008-add-search.yaml` | F10 |
-| `009-create-outbox-and-processed-events.yaml` | F11 |
-| `010-create-subscriptions-and-invoices.yaml` | F15 |
+| `003-create-outbox-events.yaml` | Email verification, the first background job |
+| `004-create-sources.yaml` | F2 |
+| `005-create-saves.yaml` | F2, F3 |
+| `006-create-tags.yaml` | F2 (`tags` and `save_tags`) |
+| `007-create-imports.yaml` | F5 (`imports` and `import_marks`) |
+| `008-create-notes.yaml` | Notes, no issue yet (`notes` and `note_blocks`) |
+| `009-add-search.yaml` | F10 |
+| `010-create-processed-events.yaml` | F11 |
+| `011-create-subscriptions-and-invoices.yaml` | F15 |
+
+## 5. Redis and MinIO
+
+Data outside PostgreSQL, and the rows it belongs to. Redis keeps nothing that only lives there:
+losing it drops codes in flight and resets the limits, and the Bloom filter is rebuilt from `users`.
+
+```mermaid
+flowchart LR
+  subgraph pg["PostgreSQL"]
+    username["users.username"]
+    avatar["users.avatar_key"]
+    upload["imports.storage_key"]
+    markImage["import_marks.image_key"]
+    saveImage["saves.image_key"]
+  end
+  subgraph redis["Redis 8"]
+    bloom["usernames<br/>Bloom filter"]
+    codes["code:extension:*<br/>code:verify-email:*"]
+    rate["rate:*"]
+    idem["idem:mail:*"]
+  end
+  subgraph files["MinIO, private bucket ari"]
+    avatars["avatars/{userId}/{photoId}.jpg"]
+    imports["imports/{userId}/{importId}"]
+    marks["marks/{userId}/{markId}.webp"]
+    saves["saves/{userId}/{saveId}.{jpg,png,webp}"]
+  end
+  username -- "BF.ADD, nightly rebuild" --> bloom
+  avatar --> avatars
+  upload --> imports
+  markImage --> marks
+  saveImage --> saves
+```
+
+| Redis key | Type | Holds | Lifetime |
+|---|---|---|---|
+| `usernames` | Bloom filter, 0.1% false positives, room for 1,000,000 names, then grows | Every taken username ([sequences §1](sequences.md#1-register-or-sign-in-f1)) | Rebuilt nightly and when missing |
+| `rate:{action}:{ip or user id}:{minute}` | Counter (`INCR`, then `EXPIRE`) | Requests in the current minute, e.g. the username check, 30 a minute per IP | 1 minute |
+| `code:extension:{SHA-256 of the code}` | String: user id | The extension's sign-in code ([sequences §6](sequences.md#6-save-from-the-extension-f13)) | 60 seconds, single use |
+| `code:verify-email:{SHA-256 of the code}` | String: JSON with the user id and the email (`GETDEL` needs a string) | An email's verify link ([sequences §8](sequences.md#8-add-and-verify-an-email)) | 24 hours, single use |
+| `idem:mail:{event id}` | String: `sending`, then `sent` | `sending` while a mail sender works on the event, `sent` once the email went out | `sending` 1 minute (a crashed sender blocks the event no longer), `sent` 7 days |
+
+| MinIO key | Row | Written | Deleted |
+|---|---|---|---|
+| `imports/{userId}/{importId}` | `imports.storage_key` | The upload | Once read, or on discard or dismiss |
+| `marks/{userId}/{markId}.webp` | `import_marks.image_key` | The import consumer, for `DRAWN` and `HANDWRITTEN` marks | With its marks, when the import is discarded |
+| `saves/{userId}/{saveId}.{jpg,png,webp}` | `saves.image_key` | An image clip (one multipart `POST /saves`, 2 MB at most), or a copy of a saved handwritten mark | After its save's deletion commits |
+| `avatars/{userId}/{photoId}.{jpg,png,webp}` | `users.avatar_key` | `PUT /me/photo`; the website sends a 512×512 JPEG cropped in the browser | After the row points at a new photo, or the photo is removed |
+
+- Every object belongs to exactly one row and is deleted after that row's delete commits. Deleting an
+  account deletes everything under its `{userId}` in each prefix.
+- MinIO runs in compose (`pgsty/minio`, a pinned community fork); any S3-compatible server can take
+  its place with the same keys. The browser shows images through signed links from `ari-api`,
+  valid for an hour; a new photo gets a new `photoId`, so no old copy is cached.
+- A new file is stored before its row points at it; if the row update fails, the file is deleted
+  again. The file a row stops pointing at is deleted after the update; a failed delete only leaves
+  an orphan.

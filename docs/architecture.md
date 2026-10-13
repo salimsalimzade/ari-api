@@ -1,14 +1,14 @@
 # ari-api architecture
 
-Last updated 2026-10-08. The server side of Ari: how `ari-api` connects to its callers and
+Last updated 2026-10-12. The server side of Ari: how `ari-api` connects to its callers and
 services, its sign-in rules and error codes, and how to build it. Read it together with
 `.claude/skills/ari-api/SKILL.md`. If they ever disagree, ask before writing code.
 
 | File | What it shows |
 |---|---|
 | `architecture.md` (this file) | How ari-api connects, sign-in rules, error codes, implementation guide |
-| [`sequences.md`](sequences.md) | Step by step: sign-in, refresh, library page, saving, imports, extension, billing |
-| [`database.md`](database.md) | Every table, column and relation |
+| [`sequences.md`](sequences.md) | Step by step: sign-in and the username check, refresh, library page, saving, imports, extension, billing, email |
+| [`database.md`](database.md) | Every table, column and relation, plus what lives in Redis and MinIO |
 
 Feature numbers (F1, F8, F9…) match the GitHub issues on the "Ari" project board.
 
@@ -21,42 +21,106 @@ flowchart LR
   web["ari<br/>SolidStart server"]
   api["ari-api<br/>Spring Boot"]
   db[("PostgreSQL<br/>data and search")]
-  mq[["RabbitMQ<br/>background jobs"]]
-  files[("File storage<br/>S3-compatible")]
-  redis[("Redis<br/>one-time codes, rate limits")]
+  redis[("Redis 8<br/>username Bloom filter, one-time codes,<br/>rate limits, idempotency keys")]
+  mq[["RabbitMQ<br/>import.process, email.*"]]
+  files[("MinIO<br/>profile photos, uploads, clip images")]
+  esp["Email provider<br/>Mailpit locally"]
   paddle["Paddle<br/>billing"]
 
   browser -- "pages (HTML + cookies)" --> web
   web -- "data while rendering (forwards cookies)" --> api
   browser -- "data after hydration (JSON + cookies)" --> api
   ext -- "saves (JSON + Bearer token)" --> api
+  browser -- "images (signed URLs)" --> files
   browser -- "checkout (Paddle.js)" --> paddle
   paddle -- "webhooks" --> api
   api --> db
-  api --> mq
-  api --> files
   api --> redis
+  api <-- "publish, consume import.process and email.*" --> mq
+  api -- "S3 API" --> files
+  api -- "SMTP (mail sender)" --> esp
 
   classDef later stroke-dasharray: 5 5
-  class ext,mq,files,redis,paddle later
+  class ext,paddle later
 ```
 
-Dashed boxes are later features. Accounts and sessions live in PostgreSQL (F1); the library
-endpoints get their tables when their features are built.
+Dashed boxes are later features. Accounts, sessions and the account page live in PostgreSQL, Redis,
+RabbitMQ, the mail sender and MinIO; the library endpoints get their tables when their features
+are built.
 
 Key decisions:
 
 - `ari-api` is a JSON API with three callers: the `ari` server while it renders pages (it forwards
   the browser's cookies), the browser after hydration (cookies, with CORS allowing the web origin
   and credentials), and the extension (F13, `Authorization: Bearer`).
-- Only `ari-api` talks to PostgreSQL, RabbitMQ, file storage, Redis, and only `ari-api`
-  receives Paddle webhooks. Only the webhook changes a user's plan.
-- Long work runs in the background: file imports go through the outbox, RabbitMQ and a consumer
-  inside `ari-api` ([sequences §5](sequences.md#5-pdf-or-word-import-f11)).
+- Only `ari-api` talks to PostgreSQL and receives Paddle webhooks. Only the webhook changes a user's
+  plan.
+- **Redis 8** has the Bloom filter built in (`BF.*` commands, sent through Spring Data Redis's
+  `RedisConnection.execute`, no extra client). A Bloom filter of taken usernames answers the live
+  "is this username free?" check without the database in most cases; the database's unique key
+  still decides ([sequences §1](sequences.md#1-register-or-sign-in-f1)). Redis also holds one-time
+  codes, rate limits and idempotency keys, never data that only lives there.
+- **RabbitMQ** runs everything slow in the background. `ari-api` never publishes inside a request:
+  it writes an outbox row in the same transaction as the business change, and the outbox publisher
+  sends it (section 1.1). Uploaded files are read by the import consumer inside `ari-api`
+  ([sequences §5](sequences.md#5-pdf-or-word-import-f11)).
+- **The mail sender** is a module of `ari-api` for now (`feature/mail`): it consumes the `email.*`
+  queues, renders the Thymeleaf template for the message's type and language, and sends it over
+  SMTP (Mailpit locally, any provider later). It reads no table; Redis tells it whether an event
+  was already sent ([sequences §8](sequences.md#8-add-and-verify-an-email)). It talks to the rest
+  of `ari-api` only through RabbitMQ, so it can move to its own app without changes.
+- **MinIO** stores files through the S3 API (`common/client/ObjectStorage`, the AWS SDK), so any
+  S3-compatible server can replace it by config: profile photos now, uploads until they are read
+  and clipped images later. MinIO no longer publishes its own images, so compose and the tests run
+  the pinned community fork `pgsty/minio`. The bucket is private and created at startup; `ari-api`
+  hands the browser signed links valid for an hour, signed for `STORAGE_PUBLIC_ENDPOINT`, the
+  address the browser reaches. The object keys are in
+  [database.md](database.md#5-redis-and-minio).
 - Local URLs: API `http://localhost:8080`, base path `/api/v1`, web origin `http://localhost:3000`.
   Cookies ignore the port, so the `ari` server receives the cookies `ari-api` sets on `localhost`.
   In production the two apps run on sibling subdomains and the cookies set `Domain` to the shared
   parent domain (F16).
+
+### 1.1 Background jobs
+
+```mermaid
+flowchart LR
+  subgraph apiBox["ari-api"]
+    tx["Use case<br/>one transaction"]
+    pub["Outbox publisher<br/>every second"]
+    ic["Import consumer"]
+    mail["Mail sender"]
+  end
+  db[("PostgreSQL<br/>outbox_events")]
+  subgraph mqBox["RabbitMQ"]
+    ex{{"ari exchange<br/>direct"}}
+    qi["import.process"]
+    qe["email.transactional"]
+    qb["email.bulk"]
+    retry["Retry queues<br/>2 s, 10 s, 60 s"]
+    dlq["Dead-letter queues<br/>one per queue"]
+  end
+  files[("MinIO")]
+  esp["Email provider"]
+
+  tx -- "business rows + outbox row" --> db
+  pub -- "unsent rows" --> db
+  pub -- "publish, wait for the confirm" --> ex
+  ex --> qi & qe & qb
+  qi --> ic
+  qe & qb --> mail
+  ic -- "read the file" --> files
+  mail --> esp
+  ic & mail -. "failed, try again" .-> retry
+  retry -. "delay over" .-> ex
+  ic & mail -. "fourth failure" .-> dlq
+```
+
+- A consumer that fails rejects the message into the next retry queue (2 s, then 10 s, then 60 s,
+  by message TTL); when the delay is over it goes back to its queue. The fourth failure goes to the
+  dead-letter queue, and the user sees a failed import.
+- Consumers are idempotent by event id: the import consumer through `processed_events`, the mail
+  sender through a Redis key.
 
 ## 2. Configuration
 
@@ -66,10 +130,23 @@ Every value comes from an environment variable (locally from `.env`, see `.env.e
 |---|---|---|
 | `DB_URL`, `DB_USERNAME` | `jdbc:postgresql://localhost:5432/ari`, `ari` | PostgreSQL; `docker compose up -d postgres` starts one |
 | `DB_PASSWORD` | none (required) | Also sets the password of the compose `postgres` service |
+| `RABBITMQ_HOST`, `RABBITMQ_PORT` | `localhost`, `5672` | RabbitMQ; `docker compose up -d rabbitmq` starts one |
+| `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD` | `ari`, none | Also set the user of the compose `rabbitmq` service |
 | `APP_JWT_SECRET` | none (required) | HS256 key for access tokens, at least 32 characters (`openssl rand -base64 48`) |
 | `APP_COOKIE_SECURE` | `true` | `false` only for `http://localhost` |
 | `APP_COOKIE_DOMAIN` | blank | Shared parent domain in production; blank keeps cookies on the API host |
 | `APP_SEED_DEMO_DATA` | `false` | Adds `demo` / `demo1234`; local development and tests only |
+| `REDIS_URL` | `redis://localhost:6379` | Redis; `docker compose up -d redis` starts one |
+| `APP_WEB_URL` | `http://localhost:3000` | The website, for links in emails |
+| `MAIL_HOST`, `MAIL_PORT` | `localhost`, `1025` | SMTP; Mailpit locally (`docker compose up -d mailpit`, inbox on http://localhost:8025) |
+| `MAIL_USERNAME`, `MAIL_PASSWORD` | blank | The email provider's SMTP login. Locally a fake one (`ari-local` / `ari-local-only` in `.env`), which Mailpit accepts like any other. Production also needs STARTTLS (F16) |
+| `MAIL_STARTTLS`, `MAIL_SSL` | `false`, `false` | Encryption a real provider needs: STARTTLS on port 587 (Gmail, Brevo) or SSL on 465. Examples in `.env.example` |
+| `MAIL_DOCKER_HOST` | `mailpit` | The SMTP host the API uses inside docker compose; set it to the provider's host to send real emails from there |
+| `APP_MAIL_FROM` | `Ari <no-reply@ari.test>` | The sender of every email; `.test` is reserved for testing, so production sets a real address |
+| `STORAGE_ENDPOINT` | `http://localhost:9000` | Where `ari-api` reaches MinIO; `http://minio:9000` inside compose |
+| `STORAGE_PUBLIC_ENDPOINT` | `http://localhost:9000` | Where the browser reaches MinIO; photo links are signed for it |
+| `STORAGE_ACCESS_KEY`, `STORAGE_SECRET_KEY` | `ari-local`, none | Also the compose `minio` service's root user; local-only values in `.env` |
+| `STORAGE_BUCKET`, `STORAGE_REGION` | `ari`, `us-east-1` | The one bucket, created at startup; MinIO ignores the region, S3 signatures need one |
 
 ## 3. Sign-in rules
 
@@ -96,9 +173,17 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 | `VALIDATION_FAILED` | 400 | Bad body, query or upload (file type or size) |
 | `UNAUTHORIZED` | 401 | Missing, expired or invalid token, sign-in code or webhook signature |
 | `INVALID_CREDENTIALS` | 401 | Wrong username or password |
-| `LIMIT_REACHED` | 403 | A Free user already stores 500 highlights |
+| `INVALID_CODE` | 401 | An email's verify link is unknown, expired or used, or a newer address is waiting for its link |
 | `NOT_FOUND` | 404 | The item does not exist or belongs to another user |
-| `USERNAME_TAKEN` | 409 | Register with a username that is already used |
+| `INVALID_SAVE` | 400 | A save breaks the rules of its kind: a highlight without a color, a clip with one or without a clip type, a table clip without Markdown, an image clip without its image, an `IMPORT` posted directly; or a color set on a clip |
+| `INVALID_IMAGE` | 400 | A clip's image isn't a JPEG, PNG or WebP by its bytes, or is over 2 MB |
+| `INVALID_URL` | 400 | A source's address isn't an http or https address of at most 2048 characters |
+| `INVALID_CURSOR` | 400 | A list cursor the API did not make |
+| `USERNAME_TAKEN` | 409 | Register, or change the profile to, a username that is already used, in any case |
+| `INVALID_PHOTO` | 400 | A profile photo that isn't a JPEG, PNG or WebP image by its bytes, or is over 2 MB |
+| `FILE_TOO_LARGE` | 413 | An upload over the server's limit (2 MB for a profile photo or a clip's image) |
+| `EMAIL_TAKEN` | 409 | A verify link is opened for an address another account verified first |
+| `RATE_LIMITED` | 429 | Too many requests in a minute (Redis counters), e.g. the username check |
 
 ## 5. How it is built
 

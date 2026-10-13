@@ -1,4 +1,10 @@
 # Tests get their database from Testcontainers (IntegrationTestConfiguration) and never read .env.
+spring:
+  mail:
+    # A fake login; the Mailpit test container accepts any (host and port come from the container)
+    username: ari-test
+    password: ari-test-only
+
 app:
   seed-demo-data: true
   auth:

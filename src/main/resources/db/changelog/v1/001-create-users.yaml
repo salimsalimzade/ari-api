@@ -19,6 +19,9 @@ databaseChangeLog:
                     unique: true
                     uniqueConstraintName: users_email_key
               - column:
+                  name: pending_email
+                  type: varchar(320)
+              - column:
                   name: username
                   type: varchar(30)
                   constraints:
@@ -71,6 +74,8 @@ databaseChangeLog:
               ALTER TABLE users
               ADD CONSTRAINT users_username_check
                 CHECK (username = lower(username) AND username ~ '^[a-z0-9_.]{3,30}$'),
+              ADD CONSTRAINT users_email_check CHECK (email = lower(email)),
+              ADD CONSTRAINT users_pending_email_check CHECK (pending_email = lower(pending_email)),
               ADD CONSTRAINT users_plan_check CHECK (plan IN ('NONE', 'HIVE')),
               ADD CONSTRAINT users_saves_count_check CHECK (saves_count >= 0)
       rollback:

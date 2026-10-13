@@ -1,0 +1,72 @@
+databaseChangeLog:
+  - changeSet:
+      id: 006-create-tags
+      author: ari
+      changes:
+        - createTable:
+            tableName: tags
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: tags_pkey
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: tags_user_id_fkey
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: name
+                  type: varchar(50)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: ALTER TABLE tags ADD CONSTRAINT tags_name_check CHECK (name = btrim(name) AND name <> '')
+        # "Swarm" and "swarm" are one tag; the first spelling is kept.
+        - sql:
+            sql: CREATE UNIQUE INDEX tags_user_name_key ON tags (user_id, lower(name))
+        - createTable:
+            tableName: save_tags
+            columns:
+              - column:
+                  name: save_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: save_tags_save_id_fkey
+                    references: saves(id)
+                    deleteCascade: true
+              - column:
+                  name: tag_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: save_tags_tag_id_fkey
+                    references: tags(id)
+                    deleteCascade: true
+        - addPrimaryKey:
+            tableName: save_tags
+            constraintName: save_tags_pkey
+            columnNames: save_id, tag_id
+        - createIndex:
+            tableName: save_tags
+            indexName: save_tags_tag_id_idx
+            columns:
+              - column:
+                  name: tag_id
+      rollback:
+        - dropTable:
+            tableName: save_tags
+        - dropTable:
+            tableName: tags

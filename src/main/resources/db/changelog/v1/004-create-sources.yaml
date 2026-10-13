@@ -1,0 +1,74 @@
+databaseChangeLog:
+  - changeSet:
+      id: 004-create-sources
+      author: ari
+      changes:
+        - createTable:
+            tableName: sources
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: sources_pkey
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: sources_user_id_fkey
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: kind
+                  type: varchar(10)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: name
+                  type: varchar(255)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: title
+                  type: varchar(500)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: author
+                  type: varchar(255)
+              - column:
+                  name: url
+                  type: text
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE sources
+              ADD CONSTRAINT sources_kind_check CHECK (kind IN ('WEBSITE', 'FILE')),
+              ADD CONSTRAINT sources_url_check CHECK ((kind = 'WEBSITE') = (url IS NOT NULL))
+        # One row per web page and user, so saving from a page again reuses it.
+        - sql:
+            sql: >-
+              CREATE UNIQUE INDEX sources_user_url_key ON sources (user_id, url)
+              WHERE kind = 'WEBSITE'
+        - createIndex:
+            tableName: sources
+            indexName: sources_user_id_idx
+            columns:
+              - column:
+                  name: user_id
+      rollback:
+        - dropTable:
+            tableName: sources

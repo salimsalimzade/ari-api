@@ -1,0 +1,10 @@
+[(#{verify-email.greeting(${fullName})})]
+
+[(#{verify-email.text})]
+
+[(${link})]
+
+[(#{verify-email.expires})]
+[(#{verify-email.ignore})]
+
+Ari

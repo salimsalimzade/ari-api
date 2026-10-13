@@ -1,0 +1,81 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="app.ari.api.feature.save.infrastructure.SaveMyBatisRepository">
+
+  <sql id="columns">
+    s.id, s.user_id, s.source_id, s.kind, s.color, s.clip_type, s.text, s.content_md, s.image_key,
+    s.comment, s.section, s.page_number, s.created_at, s.updated_at
+  </sql>
+
+  <!--
+    The Library's filters on the table aliased s. A save needs to match any one of a group's values
+    (tags, colors, sources) and each group that is given. Tag names arrive in lowercase.
+  -->
+  <sql id="filter">
+    <if test="filter.kind() != null">AND s.kind = #{filter.kind}</if>
+    <if test="!filter.colors().isEmpty()">
+      AND s.color IN
+      <foreach collection="filter.colors()" item="color" open="(" separator="," close=")">#{color}</foreach>
+    </if>
+    <if test="!filter.sourceIds().isEmpty()">
+      AND s.source_id IN
+      <foreach collection="filter.sourceIds()" item="sourceId" open="(" separator="," close=")">#{sourceId}</foreach>
+    </if>
+    <if test="!filter.tags().isEmpty()">
+      AND EXISTS (
+        SELECT 1 FROM save_tags st JOIN tags t ON t.id = st.tag_id
+        WHERE st.save_id = s.id AND lower(t.name) IN
+        <foreach collection="filter.tags()" item="tag" open="(" separator="," close=")">#{tag}</foreach>
+      )
+    </if>
+  </sql>
+
+  <insert id="insert">
+    INSERT INTO saves (id, user_id, source_id, kind, color, clip_type, text, content_md, image_key,
+                       comment, section, page_number, created_at, updated_at)
+    VALUES (#{id}, #{userId}, #{sourceId}, #{kind}, #{color,jdbcType=VARCHAR},
+            #{clipType,jdbcType=VARCHAR}, #{text}, #{contentMd,jdbcType=VARCHAR},
+            #{imageKey,jdbcType=VARCHAR}, #{comment}, #{section,jdbcType=VARCHAR},
+            #{pageNumber,jdbcType=INTEGER}, #{createdAt}, #{updatedAt})
+  </insert>
+
+  <select id="findById" resultType="app.ari.api.feature.save.domain.model.Save">
+    SELECT <include refid="columns"/> FROM saves s WHERE s.id = #{id} AND s.user_id = #{userId}
+  </select>
+
+  <!-- Keyset paging over the index on (user_id, created_at DESC, id DESC). -->
+  <select id="findPage" resultType="app.ari.api.feature.save.domain.model.Save">
+    SELECT <include refid="columns"/> FROM saves s
+    WHERE s.user_id = #{userId}
+    <if test="beforeAt != null">AND (s.created_at, s.id) &lt; (#{beforeAt}, #{beforeId})</if>
+    <include refid="filter"/>
+    ORDER BY s.created_at DESC, s.id DESC
+    LIMIT #{limit}
+  </select>
+
+  <update id="update">
+    UPDATE saves SET color = #{color,jdbcType=VARCHAR}, comment = #{comment}, updated_at = #{updatedAt}
+    WHERE id = #{id} AND user_id = #{userId}
+  </update>
+
+  <delete id="delete">
+    DELETE FROM saves WHERE id = #{id} AND user_id = #{userId}
+  </delete>
+
+  <select id="countByKind" resultType="app.ari.api.feature.save.domain.model.KindCount">
+    SELECT s.kind AS kind, count(*) AS count FROM saves s
+    WHERE s.user_id = #{userId}
+    <include refid="filter"/>
+    GROUP BY s.kind
+  </select>
+
+  <select id="countByColor" resultType="app.ari.api.feature.save.domain.model.ColorCount">
+    SELECT color, count(*) AS count FROM saves
+    WHERE user_id = #{userId} AND color IS NOT NULL
+    GROUP BY color
+  </select>
+
+  <select id="countBySource" resultType="app.ari.api.feature.save.domain.model.SourceCount">
+    SELECT source_id, count(*) AS count FROM saves WHERE user_id = #{userId} GROUP BY source_id
+  </select>
+</mapper>

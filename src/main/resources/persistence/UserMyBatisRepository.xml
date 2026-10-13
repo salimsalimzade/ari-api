@@ -3,8 +3,8 @@
 <mapper namespace="app.ari.api.feature.account.infrastructure.UserMyBatisRepository">
 
   <sql id="columns">
-    id, email, username, password_hash, full_name, birth_date, plan, saves_count,
-    email_verified_at, created_at, updated_at
+    id, email, pending_email, username, password_hash, full_name, birth_date, avatar_key, plan,
+    saves_count, email_verified_at, created_at, updated_at
   </sql>
 
   <select id="findById" resultType="app.ari.api.feature.account.domain.model.User">
@@ -18,8 +18,8 @@
   <!-- A unique key decides: 0 rows inserted means the username is taken. -->
   <insert id="insert">
     INSERT INTO users (<include refid="columns"/>)
-    VALUES (#{id}, #{email}, #{username}, #{passwordHash}, #{fullName},
-            #{birthDate,jdbcType=DATE}, #{plan}, #{savesCount}, #{emailVerifiedAt},
+    VALUES (#{id}, #{email}, #{pendingEmail}, #{username}, #{passwordHash}, #{fullName},
+            #{birthDate,jdbcType=DATE}, #{avatarKey}, #{plan}, #{savesCount}, #{emailVerifiedAt},
             #{createdAt}, #{updatedAt})
     ON CONFLICT DO NOTHING
   </insert>
@@ -35,4 +35,56 @@
         updated_at = #{updatedAt}
     WHERE id = #{id}
   </update>
+
+  <update id="setPendingEmail">
+    UPDATE users SET pending_email = #{pendingEmail,jdbcType=VARCHAR}, updated_at = #{at}
+    WHERE id = #{id}
+  </update>
+
+  <!-- The unique key on email decides when two accounts confirm the same address at once. -->
+  <update id="confirmEmail">
+    UPDATE users
+    SET email = pending_email, pending_email = NULL, email_verified_at = #{at}, updated_at = #{at}
+    WHERE id = #{id} AND pending_email = #{email}
+  </update>
+
+  <select id="isEmailTaken" resultType="boolean">
+    SELECT EXISTS (SELECT 1 FROM users WHERE email = #{email} AND id &lt;&gt; #{exceptUserId})
+  </select>
+
+  <update id="removeEmail">
+    UPDATE users
+    SET email = NULL, pending_email = NULL, email_verified_at = NULL, updated_at = #{at}
+    WHERE id = #{id}
+  </update>
+
+  <!-- The unique key on username decides when two accounts take the same one at once. -->
+  <update id="updateProfile">
+    UPDATE users
+    SET username = #{username}, full_name = #{fullName}, birth_date = #{birthDate,jdbcType=DATE},
+        updated_at = #{at}
+    WHERE id = #{id}
+  </update>
+
+  <update id="setAvatarKey">
+    UPDATE users SET avatar_key = #{avatarKey,jdbcType=VARCHAR}, updated_at = #{at} WHERE id = #{id}
+  </update>
+
+  <!-- Not updated_at: the username filter's rebuild treats a newer updated_at as a username change. -->
+  <update id="changeSavesCount">
+    UPDATE users SET saves_count = saves_count + #{delta} WHERE id = #{id}
+  </update>
+
+  <select id="usernameExists" resultType="boolean">
+    SELECT EXISTS (SELECT 1 FROM users WHERE username = #{username})
+  </select>
+
+  <!-- Keyset paging over the unique index on username. -->
+  <select id="findUsernamesAfter" resultType="string">
+    SELECT username FROM users WHERE username &gt; #{after} ORDER BY username LIMIT #{limit}
+  </select>
+
+  <select id="findUsernamesUpdatedSince" resultType="string">
+    SELECT username FROM users WHERE updated_at &gt;= #{since}
+  </select>
 </mapper>

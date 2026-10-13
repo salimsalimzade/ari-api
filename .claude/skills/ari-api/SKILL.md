@@ -5,7 +5,7 @@ description: Setup guide and roadmap for ari-api, the Java / Spring Boot backend
 
 # ari-api: backend setup guide and roadmap
 
-Last updated 2026-10-08. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
+Last updated 2026-10-13. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
 
 - **ari-api** (this repo): the Java / Spring Boot backend.
 - **ari**: the frontend (SolidStart website now, browser extension later). It calls this API from
@@ -15,7 +15,7 @@ Write "Ari" in UI text and `ari` in code, package names and URLs; never use the 
 
 Accounts are real: sign-in with a password (F1), stored in PostgreSQL with Liquibase
 and MyBatis. Every new feature stores its data in PostgreSQL from the start; there is no in-memory
-mode. Formatting, linting and CI run on every change. Not yet: queues, storage, Redis or billing.
+mode. Formatting, linting and CI run on every change. Not yet: billing.
 Those are the TODO list in section 10, with the decisions already made. Diagrams and the sign-in
 rules are in `docs/` (`architecture.md`, `sequences.md`, `database.md`).
 
@@ -23,10 +23,11 @@ rules are in `docs/` (`architecture.md`, `sequences.md`, `database.md`).
 
 The finished MVP lets users:
 
-1. Save highlighted text from any web page with its source (title, site, URL, jump-back link).
+1. Save highlighted text from any web page with its source (title, site, URL; the website builds the
+   jump-back link from the URL and the text).
 2. Clip a whole page section (tables, code, lists) with its formatting.
 3. Pull highlights out of PDF, Word and image files.
-4. Browse, search, move, delete and export everything as Markdown, organized in folders.
+4. Browse, search, tag, filter, delete and export everything as Markdown.
 5. Try everything free for 14 days once a card is added, then pay for Hive (the only plan).
 
 The library and import endpoints in section 5 come next, one feature at a time, each with its own
@@ -36,13 +37,13 @@ tables.
 
 | Command | What happens |
 |---|---|
-| `docker compose up -d postgres` | Starts PostgreSQL 18 on port 5432 for `bootRun` (data kept in the `postgres-data` volume) |
+| `docker compose up -d postgres redis rabbitmq mailpit minio` | Starts what `bootRun` needs: PostgreSQL 18 on 5432 (data kept in the `postgres-data` volume), Redis 8 on 6379, RabbitMQ 4 on 5672 (admin page on http://localhost:15672), Mailpit (SMTP on 1025, inbox on http://localhost:8025) and MinIO (S3 API on 9000, console on http://localhost:9001, files in the `minio-data` volume) |
 | `./gradlew bootRun` | Starts the API on http://localhost:8080; Liquibase creates or updates the tables |
 | `./gradlew spotlessApply` | Formats all Java code (Google Java Style) and removes unused imports |
 | `./gradlew check` | Format check + lint (Error Prone runs while compiling) + tests; Docker must be running (Testcontainers) |
 | `docker compose up --build` | Runs PostgreSQL and the API in containers, the API on port 8080 |
 | `lefthook install` | Installs the git hooks; run it once after cloning (section 6) |
-| `cp .env.example .env` | Creates your local, git-ignored config; run it once after cloning (section 4) |
+| `cp .env.example .env` | Creates your local, git-ignored config with every key empty; run it once after cloning, then fill in the values (section 4) |
 | GitHub Actions (`ci.yml`) | Runs format check, tests (with Error Prone lint) and build on every pull request and push to `main` (section 6) |
 
 ## 3. Packages
@@ -59,13 +60,16 @@ class `AriApiApplication`.
 | `spring-boot-starter-security-oauth2-resource-server` | Spring Security; our JWTs, read from the `ari_access` cookie or a Bearer header |
 | `spring-boot-starter-jdbc`, `mybatis-spring-boot-starter` (4.x for Boot 4), `postgresql` | Database access with SQL in XML mappers |
 | `spring-boot-starter-liquibase` | Creates and updates the tables at startup |
+| `spring-boot-starter-data-redis` | Verify-link codes and rate limits (`StringRedisTemplate`); tests run a `redis:8` container |
+| `spring-boot-starter-amqp`, `testcontainers-rabbitmq` | The outbox publisher (publisher confirms) and the consumers; tests run a `rabbitmq:4` container |
+| `software.amazon.awssdk:s3` (BOM `awsSdkVersion`, without the Netty async client), `testcontainers-minio` | `ObjectStorage`: files in MinIO through the S3 API, signed links for images; tests run the same MinIO image |
+| `spring-boot-starter-mail`, `spring-boot-starter-thymeleaf` | The mail sender: SMTP, and the email templates (HTML plus a plain-text version); tests catch emails in an `axllent/mailpit` container |
 | `springdoc-openapi-starter-webmvc-ui` (the version line for Boot 4) | Swagger UI and `/v3/api-docs` |
 | `mapstruct` + `mapstruct-processor` | Mapping between domain models and request/response DTOs |
 | `spring-boot-starter-test`, `spring-boot-starter-security-test`, `archunit-junit5` | Tests, plus the architecture rules test |
 | `spring-boot-testcontainers`, `testcontainers-postgresql` | A real PostgreSQL 18 container for tests |
 | Gradle plugins: `com.diffplug.spotless`, `net.ltgt.errorprone` | Formatting and linting (section 6) |
 
-Not yet (TODO): AMQP, Redis, S3 SDK.
 
 **JDK:** install GraalVM Community 25 on your machine. On Ubuntu with SDKMAN:
 `sdk install java <latest 25.x>-graalce` (pick the newest one from `sdk list java`). IntelliJ IDEA
@@ -76,8 +80,8 @@ toolchain below requires a GraalVM 25 JDK, so the build never silently runs on a
 
 **Style:** layered feature modules. Each aggregate is one folder under `feature/` with the same four
 layers: presentation, application, domain, infrastructure. `feature/account` is the first built
-module and shows every pattern (MyBatis adapters, Liquibase, exceptions, tests); `feature/highlight`
-below is the planned layout to copy for library aggregates.
+module and shows every pattern (MyBatis adapters, Liquibase, exceptions, tests); `feature/save`
+is the reference for library aggregates (it also stores files and calls other features' facades).
 
 ```text
 ari-api/
@@ -91,36 +95,40 @@ ari-api/
     ├── main/java/app/ari/api/
     │   ├── AriApiApplication.java
     │   ├── common/                     # cross-feature shared code
-    │   │   ├── client/                 # external clients and message publishers (later)
+    │   │   ├── client/                 # MessagePublisher (RabbitMQ, waits for its confirm), ObjectStorage (MinIO through S3)
     │   │   ├── exception/              # base exceptions + GlobalExceptionHandler (Problem Details)
     │   │   ├── handlers/               # MyBatis TypeHandlers: Instant ↔ timestamptz in UTC, UUID ↔ uuid
+    │   │   ├── image/                  # ImageFormat: JPEG, PNG or WebP, recognized by the first bytes
+    │   │   ├── ratelimit/              # RateLimiter: fixed-window counters in Redis
     │   │   ├── validation/             # shared constraints, e.g. @MaxBytes
-    │   │   ├── request/ · response/    # shared DTOs: cursor params, PageResponse<T>
+    │   │   ├── response/               # shared DTOs: PageResponse<T>
+    │   │   ├── transaction/            # AfterCommit: work that must wait for the commit
     │   │   └── util/                   # small helpers: ids, time
-    │   ├── config/                     # Spring config: security (JWT), OpenAPI, CORS, Clock (later: RabbitMQ, storage)
+    │   ├── config/                     # Spring config: security (JWT), OpenAPI, CORS, Clock, RabbitMQ queues, scheduling, mail (later: storage)
     │   └── feature/                    # one folder per aggregate
-    │       ├── highlight/              # ← reference module, copy this layout
-    │       │   ├── presentation/       # HighlightController (interface + Swagger) + impl/HighlightControllerImpl
+    │       ├── save/                   # built, the reference module: the Library (highlights and clips) and its tags
+    │       │   ├── presentation/       # SaveController (interface + Swagger) + impl/SaveControllerImpl; uses application types only
     │       │   ├── application/
-    │       │   │   ├── facade/         # HighlightFacade + impl/HighlightFacadeImpl (controller → facade)
+    │       │   │   ├── facade/         # SaveFacade + impl/SaveFacadeImpl (controller → facade; calls SourceFacade and AccountFacade)
     │       │   │   ├── mapper/         # MapStruct mappers: domain ↔ request/response
     │       │   │   ├── model/          # DTOs: request/, response/
     │       │   │   └── exception/      # feature exceptions by type: notfound/, badrequest/
     │       │   ├── domain/
-    │       │   │   ├── model/          # Highlight, HighlightKind
-    │       │   │   ├── repository/     # HighlightRepository (port)
-    │       │   │   └── service/        # HighlightService + impl/HighlightServiceImpl
-    │       │   └── infrastructure/     # HighlightMyBatisRepository (@Mapper extending the port)
-    │       ├── folder/                 # same layout as highlight
+    │       │   │   ├── model/          # Save, NewSave, SaveKind, ClipType, HighlightColor, Tag, SaveFilter, SaveCursor
+    │       │   │   ├── repository/     # SaveRepository, TagRepository (ports)
+    │       │   │   └── service/        # SaveService + impl/SaveServiceImpl (also stores image clips through ObjectStorage)
+    │       │   └── infrastructure/     # SaveMyBatisRepository, TagMyBatisRepository (@Mapper extending the ports)
+    │       ├── source/                 # built: the page or file a save came from; facade only, no endpoints yet (the Sources page comes next)
     │       ├── account/                # built: sign-in (password), sessions, GET /me
-    │       ├── fileimport/             # same layout; returns a fake finished job ("import" is a Java keyword)
-    │       ├── outbox/                 # package-info.java only (TODO 5)
-    │       └── util/                   # package-info.java only: storage helpers (TODO 4)
+    │       ├── mail/                   # listener → facade → MailService; ports for Thymeleaf and SMTP in domain/port; reads no table
+    │       ├── fileimport/             # same layout as save; returns a fake finished job ("import" is a Java keyword)
+    │       └── outbox/                 # OutboxFacade.add in the caller's transaction; a scheduler sends every second
     ├── main/resources/
     │   ├── application.yml · application-dev.yml   # application-prod.yml later
     │   ├── db/changelog/               # Liquibase: master file + v1/ numbered files; never edit applied files
     │   ├── persistence/                # MyBatis XML mappers, e.g. UserMyBatisRepository.xml
-    │   └── templates/                  # email templates (later)
+    │   ├── i18n/                       # mail.properties (English) and mail_az.properties: the email texts
+    │   └── templates/mail/             # Thymeleaf email templates: {name}.html and {name}.txt
     └── test/java/app/ari/api/          # mirrors main: ArchitectureTest + @IntegrationTest classes (support/)
 ```
 
@@ -161,7 +169,7 @@ Rules:
   (`optional:file:.env[.properties]` in `application-dev.yml`), so tests and CI never read it.
   Docker Compose passes it in with `env_file`. Real environment variables always win. The format is
   `KEY=value`, with no quotes and no `export`, so Spring and Compose read it the same way. List
-  every key with a safe example value in `.env.example`.
+  every key, with no value, in `.env.example`.
 
 ## 5. API contract
 
@@ -170,19 +178,22 @@ frontend repo mirrors this contract, so keep `/v3/api-docs` accurate: the fronte
 its client from it later.
 
 ```java
-public record MeResponse(UUID id, String username, String fullName, LocalDate birthDate, Plan plan, int savesCount) {}
-public record FolderResponse(UUID id, String name, int highlightsCount) {}
-public record HighlightResponse(
-    UUID id, UUID folderId, HighlightKind kind,
-    String text, String contentMd,                  // contentMd only for CLIP
-    String sourceTitle, String sourceSite, String sourceUrl,
-    String fileName, Integer pageNumber, String jumpLink,
-    Instant createdAt) {}
+public record MeResponse(UUID id, String username, String fullName, LocalDate birthDate, String email, String pendingEmail, String photoUrl, Plan plan, int savesCount) {}
+public record SaveResponse(
+    UUID id, SaveKind kind, HighlightColor color,   // color: not for a CLIP
+    ClipType clipType, String text, String contentMd, String imageUrl, // clips; imageUrl is signed for an hour
+    String comment, String section, Integer pageNumber, // pageNumber: imported files only
+    List<String> tags, SourceResponse source, Instant createdAt) {}
+public record SourceResponse(UUID id, SourceKind kind, String name, String title, String author, String url) {}
+public record FacetsResponse(int total, List<TypeCount> types, List<TagFacet> tags, List<ColorFacet> colors, List<SourceFacet> sources) {}
 public record ImportJobResponse(UUID id, String fileName, ImportStatus status, int highlightsCount) {}
 public record PageResponse<T>(List<T> items, String nextCursor) {}
 
 enum Plan { NONE, HIVE }
-enum HighlightKind { TEXT, CLIP, FILE, IMAGE }
+enum SaveKind { HIGHLIGHT, CLIP, IMPORT }
+enum ClipType { TABLE, IMAGE }
+enum HighlightColor { YELLOW, GREEN, BLUE, PINK, PURPLE }
+enum SourceKind { WEBSITE, FILE }
 enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 ```
 
@@ -192,17 +203,26 @@ enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 | `POST /auth/login` `{ username, password }` | `account` | 200 + `MeResponse` + both cookies; 401 `INVALID_CREDENTIALS` |
 | `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears both |
 | `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears both cookies |
-| `GET /me` | `account` | The signed-in user (plan `NONE` until the trial starts, `savesCount` for the sidebar); 401 when signed out |
-| `GET /folders` | `folder` | Seeded folders, e.g. "Spring Boot" and "Thesis" |
-| `POST /folders` `{ name }` | `folder` | Adds a folder in memory |
-| `GET /highlights?folderId=&q=&cursor=` | `highlight` | Filters the in-memory list (case-insensitive match on text and title), 50 per page |
-| `POST /highlights` | `highlight` | Adds an item and returns it with `id` and `createdAt` |
-| `DELETE /highlights/{id}` | `highlight` | Removes it |
+| `GET /me` | `account` | The signed-in user (plan `NONE` until the trial starts, `savesCount` for the sidebar, `email` verified and `pendingEmail` waiting); 401 when signed out |
+| `PUT /me` `{ username, fullName, birthDate }` | `account` | 200 + `MeResponse`; the sign-up rules; 409 `USERNAME_TAKEN` in any case |
+| `PUT /me/photo` (multipart `photo`) | `account` | 200 + `MeResponse` with `photoUrl` (signed, an hour); JPEG, PNG or WebP by its bytes, at most 2 MB: 400 `INVALID_PHOTO`, 413 `FILE_TOO_LARGE`; the old photo is deleted |
+| `DELETE /me/photo` | `account` | 204, deletes the photo |
+| `PUT /me/email` `{ email }` | `account` | 202 + `MeResponse`, `pendingEmail` set and its verify link queued (200, nothing sent, when it already is the verified email); 429 `RATE_LIMITED` over 1 a minute or 5 a day |
+| `POST /me/email/resend` | `account` | 202 + `MeResponse`; 400 when no email is pending; 429 `RATE_LIMITED` |
+| `DELETE /me/email` | `account` | 204, clears the verified and the pending email |
+| `POST /auth/verify-email` `{ code }` | `account` | Public. 204, the pending email becomes the verified one; 401 `INVALID_CODE`; 409 `EMAIL_TAKEN` |
+| `POST /saves` `{ kind, color, clipType, text, contentMd, comment, section, tags, source: { url, name, title, author } }` | `save` | 201 + `SaveResponse`. A `HIGHLIGHT` needs a `color`; a `CLIP` has no color and a `clipType`: a `TABLE` its `contentMd`. The source is found by its address (fragment dropped) or created. 400 `VALIDATION_FAILED`, `INVALID_SAVE`, `INVALID_URL`. No plan or count limit yet |
+| `POST /saves` (multipart: `save` JSON part, `image` part) | `save` | An image clip (`kind CLIP`, `clipType IMAGE`): a JPEG, PNG or WebP of at most 2 MB, stored in MinIO first. 201 + `SaveResponse` with `imageUrl`; 400 `INVALID_IMAGE`, 413 `FILE_TOO_LARGE` |
+| `GET /saves?type=&tag=&color=&source=&cursor=&limit=` | `save` | The signed-in user's saves, newest first, 40 per page (`limit` 1 to 100); `tag`, `color` and `source` repeat; any value within a group, every group given. `PageResponse<SaveResponse>`; 400 `INVALID_CURSOR` |
+| `GET /saves/facets?type=&tag=&color=&source=` | `save` | Type tab counts (among the saves that match the filters) and the tag, color and source choices with their counts (whole Library) |
+| `PATCH /saves/{id}` `{ color, comment, tags }` | `save` | A field left out stays; `tags` replaces them all. 200 + `SaveResponse`; 404 `NOT_FOUND`; 400 `INVALID_SAVE` for a color on a clip |
+| `DELETE /saves/{id}` | `save` | 204; its image is deleted after the commit; `users.saves_count` follows; 404 `NOT_FOUND` |
 | `POST /imports` (multipart `file`) | `fileimport` | Ignores the file content; returns a `DONE` job with 0 highlights |
 | `GET /imports/{id}` | `fileimport` | Returns that job |
 
-Seed 2 folders and 6 highlights covering every `kind`, including one `CLIP` with a Markdown table and
-one `FILE` with a page number, so the frontend shows each case.
+Saves, tags and sources are real PostgreSQL data (changesets 004 to 006); there is no sample data.
+`GET /sources` and `GET /sources/{id}` for the Sources page, and the library search (`q`, F10),
+come next.
 
 ## 6. Formatting, linting and CI (on commit, push and pull request)
 
@@ -348,16 +368,20 @@ jobs:
 - `docker-compose.yml`: `postgres` (`postgres:18`, user, password and database from `.env`, data in
   the `postgres-data` volume mounted at `/var/lib/postgresql`, the path PostgreSQL 18 expects, and a
   `pg_isready` healthcheck) and `api`, which waits for a healthy `postgres` and reaches it at
-  `jdbc:postgresql://postgres:5432/ari`. For `./gradlew bootRun`, start only the database:
-  `docker compose up -d postgres`.
-
-Later, add `redis`, `rabbitmq`, `seaweedfs` and `mailpit` services here as their TODO items start.
+  `jdbc:postgresql://postgres:5432/ari`. Next to them run `redis` (`redis:8`, which has the Bloom filter built in; no
+  volume, since Redis holds nothing that only lives there), `rabbitmq` (`rabbitmq:4-management`,
+  user and password from `.env`), `mailpit` (`axllent/mailpit:v1`, catches every email sent
+  locally, accepts any SMTP login) and `minio` (`pgsty/minio`, pinned: a community fork, because
+  MinIO no longer publishes its own images; key and secret from `.env`, files in the `minio-data`
+  volume). In compose, `api` reaches MinIO at `http://minio:9000` but signs photo links for
+  `http://localhost:9000`, where the browser reaches it. For `./gradlew bootRun`, start everything
+  but `api`: `docker compose up -d postgres redis rabbitmq mailpit minio`.
 
 ## 8. Rules for the AI assistant
 
 - Build only what this file describes. No queues, storage, Redis or billing code until the matching
   TODO item starts.
-- For every new aggregate, copy the layout of `feature/highlight` exactly, and the patterns of
+- For every new aggregate, copy the layout of `feature/save` exactly, and the patterns of
   `feature/account` (MyBatis adapter, Liquibase changeset, exceptions, `@IntegrationTest`).
 - Tests that need the database use `@IntegrationTest` (`src/test/java/app/ari/api/support`): one
   shared Spring context on a PostgreSQL container, so give every test its own data (for example a
@@ -380,8 +404,7 @@ Later, add `redis`, `rabbitmq`, `seaweedfs` and `mailpit` services here as their
 
 - `./gradlew bootRun` starts the API; http://localhost:8080/swagger-ui.html lists every endpoint,
   and `/actuator/health` returns UP.
-- The endpoints in section 5 return the seeded data. Creating a folder and adding or deleting a
-  highlight survive a restart.
+- The endpoints in section 5 work on real data: saves, their tags and sources survive a restart.
 - Committing a badly formatted Java file formats it automatically; a push with a wildcard import or
   an unused variable is blocked.
 - `docker compose up --build` serves the same API on port 8080.
@@ -405,18 +428,31 @@ Do these in order, one at a time:
 3. **Search:** Postgres full-text search: a generated `tsvector` column with the `simple` config, an
    IMMUTABLE wrapper around `unaccent`, a GIN index, and `pg_trgm` for short or partial queries.
    Added as a Liquibase changeset.
-4. **File imports:** storage helpers in `feature/util` talk to S3-compatible storage (SeaweedFS
-   locally, Cloudflare R2 later; not MinIO, whose community edition is archived). Flow: upload →
-   background job → PDFBox reads PDF highlight annotations with page numbers, POI reads DOCX
-   highlights and comments → delete the file. Image OCR happens in the browser (frontend repo).
-   EPUB is not supported.
-5. **Async jobs and retries:** a transactional outbox in `feature/outbox`. Write the outbox row in
-   the same transaction as the business change; a scheduled publisher sends pending rows to RabbitMQ
-   (publishers in `common/client`) and marks them sent. Consumers retry 2 s → 10 s → 60 s, then go to
+4. **File imports:** `common/client/ObjectStorage` talks to MinIO through the AWS SDK's S3 client
+   (path-style, checksums only where required), so any S3-compatible server can replace it by
+   config. MinIO's own images are no longer published and its community edition is archived, so
+   compose and the tests use the pinned community fork `pgsty/minio`; watch it for security
+   releases. Private bucket, created at startup when missing; signed links for images; keys in
+   `docs/database.md` section 5. Profile photos use it already. Flow: upload to MinIO → outbox → RabbitMQ
+   `import.process` → the import consumer in `ari-api` → PDFBox reads PDF highlight annotations
+   with page numbers, POI reads DOCX highlights and comments → delete the file. Image OCR happens
+   in the browser (frontend repo). EPUB is not supported.
+5. **Async jobs and retries (done for email; `import.process` comes with file imports):** a transactional outbox
+   in `feature/outbox`. Write the outbox row in the same transaction as the business change
+   (`OutboxFacade.add` refuses to run without one); a scheduled publisher sends pending rows to
+   RabbitMQ every second (`common/client/MessagePublisher`, publisher confirms) and marks them sent,
+   and deletes sent rows after 7 days. `config/RabbitConfig` declares each work queue, bound to the
+   `ari` direct exchange by its own name, with `.retry.2s`, `.retry.10s` and `.retry.60s` delay
+   queues (message TTL, dead-lettered back to the work queue) and a `.dlq`. Consumers retry 2 s → 10 s → 60 s, then go to
    a dead-letter queue; they are idempotent by event id; failed jobs are visible to the user.
-   Queues: `import.process`, `email.transactional`, `email.bulk`.
-6. **Redis:** rate limits, one-time codes (including the browser extension's sign-in code) and
-   idempotency keys only.
+   Queues: `import.process`, `email.transactional`, `email.bulk`. The mail sender is `feature/mail`
+   inside `ari-api` for now: it consumes the `email.*` queues, owns the Thymeleaf templates and sends
+   over SMTP (Mailpit locally). It reads no table and talks to the rest only through RabbitMQ, so it
+   can move to its own app unchanged. Diagram in `docs/architecture.md` section 1.1.
+6. **Redis 8:** a Bloom filter of taken usernames for the live username check (the database
+   still decides; `BF.*` commands through Spring Data Redis's `RedisConnection.execute`), rate
+   limits, one-time codes (the extension's sign-in code, email verify links) and idempotency keys
+   only. Keys in `docs/database.md` section 5.
 7. **Billing:** Paddle Billing webhooks. One plan, Hive: $5/month or $48/year, the same price
    everywhere, with a 14-day free trial that starts once the user adds their card in Paddle checkout.
    No free plan and no save limit; `users.plan` is `NONE` until the trial starts. Verify webhook

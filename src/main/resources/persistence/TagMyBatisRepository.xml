@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="app.ari.api.feature.save.infrastructure.TagMyBatisRepository">
+
+  <!--
+    The unique index on (user_id, lower(name)) decides: a tag the user already has comes back with
+    its own id and spelling (the no-op update is what makes RETURNING give the row).
+  -->
+  <select id="upsertAll" resultType="app.ari.api.feature.save.domain.model.Tag" flushCache="true">
+    INSERT INTO tags (id, user_id, name, created_at) VALUES
+    <foreach collection="tags" item="tag" separator=",">
+      (#{tag.id}, #{userId}, #{tag.name}, #{tag.createdAt})
+    </foreach>
+    ON CONFLICT (user_id, lower(name)) DO UPDATE SET name = tags.name
+    RETURNING id, user_id, name, created_at
+  </select>
+
+  <insert id="link">
+    INSERT INTO save_tags (save_id, tag_id) VALUES
+    <foreach collection="tagIds" item="tagId" separator=",">(#{saveId}, #{tagId})</foreach>
+    ON CONFLICT DO NOTHING
+  </insert>
+
+  <delete id="unlinkAll">
+    DELETE FROM save_tags WHERE save_id = #{saveId}
+  </delete>
+
+  <select id="findBySaves" resultType="app.ari.api.feature.save.domain.model.SaveTag">
+    SELECT st.save_id, t.name FROM save_tags st JOIN tags t ON t.id = st.tag_id
+    WHERE st.save_id IN
+    <foreach collection="saveIds" item="saveId" open="(" separator="," close=")">#{saveId}</foreach>
+    ORDER BY lower(t.name)
+  </select>
+
+  <select id="countByTag" resultType="app.ari.api.feature.save.domain.model.TagCount">
+    SELECT t.name AS name, count(*) AS count
+    FROM save_tags st JOIN tags t ON t.id = st.tag_id
+    WHERE t.user_id = #{userId}
+    GROUP BY t.id, t.name
+    ORDER BY count(*) DESC, lower(t.name)
+  </select>
+</mapper>

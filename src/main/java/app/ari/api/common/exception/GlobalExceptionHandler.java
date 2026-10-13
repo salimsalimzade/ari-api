@@ -11,6 +11,8 @@ import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.WebRequest;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.servlet.mvc.method.annotation.ResponseEntityExceptionHandler;
 
 /**
@@ -28,7 +30,7 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
 
   @ExceptionHandler(BadRequestException.class)
   public ProblemDetail handleBadRequest(BadRequestException ex) {
-    return problem(HttpStatus.BAD_REQUEST, "BAD_REQUEST", ex.getMessage());
+    return problem(HttpStatus.BAD_REQUEST, ex.getCode(), ex.getMessage());
   }
 
   @ExceptionHandler(UnauthorizedException.class)
@@ -39,6 +41,11 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
   @ExceptionHandler(ConflictException.class)
   public ProblemDetail handleConflict(ConflictException ex) {
     return problem(HttpStatus.CONFLICT, ex.getCode(), ex.getMessage());
+  }
+
+  @ExceptionHandler(TooManyRequestsException.class)
+  public ProblemDetail handleTooManyRequests(TooManyRequestsException ex) {
+    return problem(HttpStatus.TOO_MANY_REQUESTS, ex.getCode(), ex.getMessage());
   }
 
   /** Spring Security found no valid token; the security entry point hands the error over here. */
@@ -66,6 +73,30 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     ProblemDetail body = ex.getBody();
     body.setProperty("code", "VALIDATION_FAILED");
     body.setProperty("errors", errors);
+    return handleExceptionInternal(ex, body, headers, status, request);
+  }
+
+  /** A request parameter that breaks its constraint, e.g. an invalid username to check. */
+  @Override
+  protected ResponseEntity<Object> handleHandlerMethodValidationException(
+      HandlerMethodValidationException ex,
+      HttpHeaders headers,
+      HttpStatusCode status,
+      WebRequest request) {
+    ProblemDetail body = ex.getBody();
+    body.setProperty("code", "VALIDATION_FAILED");
+    return handleExceptionInternal(ex, body, headers, status, request);
+  }
+
+  /** An upload over spring.servlet.multipart.max-file-size, e.g. a profile photo over 2 MB. */
+  @Override
+  protected ResponseEntity<Object> handleMaxUploadSizeExceededException(
+      MaxUploadSizeExceededException ex,
+      HttpHeaders headers,
+      HttpStatusCode status,
+      WebRequest request) {
+    ProblemDetail body = ex.getBody();
+    body.setProperty("code", "FILE_TOO_LARGE");
     return handleExceptionInternal(ex, body, headers, status, request);
   }
 

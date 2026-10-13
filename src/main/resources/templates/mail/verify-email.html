@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html xmlns:th="http://www.thymeleaf.org" th:lang="${#locale.language}">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title th:text="#{verify-email.subject}">Confirm your email for Ari</title>
+</head>
+<body style="margin:0;padding:24px 16px;background:#f5ead8;color:#201e1d;font-family:Helvetica,Arial,sans-serif;">
+  <div style="max-width:480px;margin:0 auto;padding:32px;background:#ffffff;border-radius:12px;">
+    <p style="margin:0 0 24px;font-size:22px;font-weight:700;">Ari</p>
+    <p style="margin:0 0 12px;font-size:16px;line-height:1.5;"
+       th:text="#{verify-email.greeting(${fullName})}">Hi Ada,</p>
+    <p style="margin:0 0 24px;font-size:16px;line-height:1.5;"
+       th:text="#{verify-email.text}">Open the link below to finish adding this email to your Ari account.</p>
+    <p style="margin:0 0 24px;">
+      <a th:href="${link}" th:text="#{verify-email.button}"
+         style="display:inline-block;padding:12px 20px;background:#201e1d;color:#f5ead8;border-radius:8px;font-size:16px;font-weight:600;text-decoration:none;">Confirm email</a>
+    </p>
+    <p style="margin:0 0 16px;font-size:14px;line-height:1.5;color:#645c50;"
+       th:text="#{verify-email.expires}">The link works once and expires in 24 hours.</p>
+    <p style="margin:0 0 4px;font-size:14px;line-height:1.5;color:#645c50;"
+       th:text="#{verify-email.fallback}">If the button doesn’t work, copy this link into your browser:</p>
+    <p style="margin:0 0 16px;font-size:14px;line-height:1.5;word-break:break-all;">
+      <a th:href="${link}" th:text="${link}" style="color:#8c491a;">https://ari.example/verify-email?code=…</a>
+    </p>
+    <p style="margin:0;font-size:14px;line-height:1.5;color:#645c50;"
+       th:text="#{verify-email.ignore}">If you didn’t ask for this, you can ignore this email.</p>
+  </div>
+</body>
+</html>

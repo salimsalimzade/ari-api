@@ -1,10 +1,14 @@
 package app.ari.api.feature.account.application.facade;
 
+import app.ari.api.feature.account.application.model.request.EmailRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
+import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
+import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
 import app.ari.api.feature.account.application.model.response.AuthTokens;
 import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
+import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
 import java.util.UUID;
 
 /** Sign-in use cases and the signed-in user. Other features use only this facade. */
@@ -24,4 +28,51 @@ public interface AccountFacade {
 
   /** Throws {@code SessionExpiredException} when the user no longer exists. */
   MeResponse me(UUID userId);
+
+  /**
+   * Makes the email the pending one and queues its verify link in {@code language}. Throws {@code
+   * EmailRateLimitedException} over 1 link a minute or 5 a day. Nothing is sent when it already is
+   * the verified email.
+   */
+  MeResponse changeEmail(UUID userId, EmailRequest request, String language);
+
+  /**
+   * Queues a new link for the pending email; throws {@code NoPendingEmailException} without one.
+   */
+  MeResponse resendVerification(UUID userId, String language);
+
+  /** Clears the verified and the pending email. */
+  void removeEmail(UUID userId);
+
+  /** Throws {@code InvalidEmailCodeException} or {@code EmailTakenException}. */
+  void verifyEmail(VerifyEmailRequest request);
+
+  /** Changes the full name, username and date of birth; throws {@code UsernameTakenException}. */
+  MeResponse updateProfile(UUID userId, ProfileRequest request);
+
+  /**
+   * Makes the image the profile photo; throws {@code InvalidPhotoException} unless it is a JPEG,
+   * PNG or WebP image of at most 2 MB.
+   */
+  MeResponse changePhoto(UUID userId, byte[] photo);
+
+  void removePhoto(UUID userId);
+
+  /**
+   * Adds {@code delta} (negative to take away) to the user's saves count, the Library count in the
+   * sidebar. Call it in the same transaction as the save it counts, so the two never drift.
+   */
+  void changeSavesCount(UUID userId, int delta);
+
+  /**
+   * Whether anybody has the username, for the live check while typing one; throws {@code
+   * UsernameCheckRateLimitedException} over 30 checks a minute from {@code clientAddress}.
+   */
+  UsernameAvailabilityResponse checkUsername(String username, String clientAddress);
+
+  /** Fills the username Bloom filter when it is missing; returns how many it holds, or -1. */
+  int fillUsernameFilterIfMissing();
+
+  /** Builds the username Bloom filter again; returns how many it holds. */
+  int rebuildUsernameFilter();
 }

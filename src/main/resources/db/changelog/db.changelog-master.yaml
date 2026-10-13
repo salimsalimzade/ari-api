@@ -6,3 +6,15 @@ databaseChangeLog:
   - include:
       file: v1/002-create-refresh-tokens.yaml
       relativeToChangelogFile: true
+  - include:
+      file: v1/003-create-outbox-events.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: v1/004-create-sources.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: v1/005-create-saves.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: v1/006-create-tags.yaml
+      relativeToChangelogFile: true

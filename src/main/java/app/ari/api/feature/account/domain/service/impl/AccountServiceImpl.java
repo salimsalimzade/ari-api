@@ -2,14 +2,15 @@ package app.ari.api.feature.account.domain.service.impl;
 
 import app.ari.api.feature.account.domain.model.Plan;
 import app.ari.api.feature.account.domain.model.User;
+import app.ari.api.feature.account.domain.model.Usernames;
 import app.ari.api.feature.account.domain.repository.UserRepository;
 import app.ari.api.feature.account.domain.service.AccountService;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
-import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
@@ -40,10 +41,12 @@ public class AccountServiceImpl implements AccountService {
         new User(
             UUID.randomUUID(),
             null,
-            normalizeUsername(username),
+            null,
+            Usernames.normalize(username),
             passwordEncoder.encode(password),
             fullName.strip(),
             birthDate,
+            null,
             Plan.NONE,
             0,
             null,
@@ -53,8 +56,13 @@ public class AccountServiceImpl implements AccountService {
   }
 
   @Override
+  public void changeSavesCount(UUID id, int delta) {
+    users.changeSavesCount(id, delta);
+  }
+
+  @Override
   public Optional<User> authenticate(String username, String password) {
-    Optional<User> user = users.findByUsername(normalizeUsername(username));
+    Optional<User> user = users.findByUsername(Usernames.normalize(username));
     String hash = user.map(User::passwordHash).orElse(null);
     boolean matches = passwordEncoder.matches(password, hash != null ? hash : dummyPasswordHash);
     return matches && hash != null ? user : Optional.empty();
@@ -65,7 +73,18 @@ public class AccountServiceImpl implements AccountService {
     return users.findById(id);
   }
 
-  private static String normalizeUsername(String username) {
-    return username.strip().toLowerCase(Locale.ROOT);
+  @Override
+  public Optional<User> updateProfile(
+      UUID id, String username, String fullName, LocalDate birthDate) {
+    String normalized = Usernames.normalize(username);
+    if (users.findByUsername(normalized).filter(owner -> !owner.id().equals(id)).isPresent()) {
+      return Optional.empty();
+    }
+    try {
+      users.updateProfile(id, normalized, fullName.strip(), birthDate, clock.instant());
+    } catch (DuplicateKeyException e) {
+      return Optional.empty(); // another account took it a moment ago
+    }
+    return users.findById(id);
   }
 }

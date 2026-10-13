@@ -17,6 +17,60 @@ services:
       timeout: 5s
       retries: 10
 
+  # Bloom filter, one-time codes, rate limits and idempotency keys; nothing that only lives here,
+  # so no volume
+  redis:
+    image: redis:8
+    container_name: ari-redis
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # Background jobs; the admin page is http://localhost:15672
+  rabbitmq:
+    image: rabbitmq:4-management
+    container_name: ari-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USERNAME:-ari}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports: ["5672:5672", "15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  # Catches every email sent locally: SMTP on 1025, the inbox on http://localhost:8025. It accepts
+  # any SMTP login, so the fake one in .env (ari-local) is used the way a provider's would be.
+  mailpit:
+    image: axllent/mailpit:v1
+    container_name: ari-mailpit
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: "true"
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports: ["1025:1025", "8025:8025"]
+
+  # Files (profile photos now, imports later): the S3 API on 9000, the console on
+  # http://localhost:9001. A community fork, because MinIO no longer publishes its own images.
+  minio:
+    image: pgsty/minio:RELEASE.2026-08-04T00-00-00Z
+    container_name: ari-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${STORAGE_ACCESS_KEY:-ari-local}
+      MINIO_ROOT_PASSWORD: ${STORAGE_SECRET_KEY}
+    ports: ["9000:9000", "9001:9001"]
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   api:
     container_name: ari-api
     build: .
@@ -26,9 +80,25 @@ services:
         required: false
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/${DB_NAME:-ari}
+      REDIS_URL: redis://redis:6379
+      RABBITMQ_HOST: rabbitmq
+      # Mailpit inside compose; with a real provider, set MAIL_DOCKER_HOST to its host in .env
+      MAIL_HOST: ${MAIL_DOCKER_HOST:-mailpit}
+      STORAGE_ENDPOINT: http://minio:9000
+      # Signed photo links are opened by the browser, which reaches MinIO on localhost
+      STORAGE_PUBLIC_ENDPOINT: http://localhost:9000
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      mailpit:
+        condition: service_healthy
+      minio:
         condition: service_healthy
 
 volumes:
   postgres-data:
+  minio-data:

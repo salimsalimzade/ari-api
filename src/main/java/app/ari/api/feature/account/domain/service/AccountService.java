@@ -15,4 +15,13 @@ public interface AccountService {
   Optional<User> authenticate(String username, String password);
 
   Optional<User> findById(UUID id);
+
+  /**
+   * Changes the full name, username and date of birth; empty when another account has the username
+   * (in any case).
+   */
+  Optional<User> updateProfile(UUID id, String username, String fullName, LocalDate birthDate);
+
+  /** Adds {@code delta} (negative to take away) to the user's saves count. */
+  void changeSavesCount(UUID id, int delta);
 }

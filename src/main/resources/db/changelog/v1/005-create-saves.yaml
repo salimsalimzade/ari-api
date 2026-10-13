@@ -1,0 +1,110 @@
+databaseChangeLog:
+  - changeSet:
+      id: 005-create-saves
+      author: ari
+      changes:
+        - createTable:
+            tableName: saves
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: saves_pkey
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: saves_user_id_fkey
+                    references: users(id)
+                    deleteCascade: true
+              # No cascade: a source is only ever removed once nothing is saved from it.
+              - column:
+                  name: source_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: saves_source_id_fkey
+                    references: sources(id)
+              - column:
+                  name: kind
+                  type: varchar(10)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: color
+                  type: varchar(10)
+              - column:
+                  name: clip_type
+                  type: varchar(10)
+              - column:
+                  name: text
+                  type: text
+                  constraints:
+                    nullable: false
+              - column:
+                  name: content_md
+                  type: text
+              - column:
+                  name: image_key
+                  type: varchar(512)
+              - column:
+                  name: comment
+                  type: text
+                  defaultValue: ''
+                  constraints:
+                    nullable: false
+              - column:
+                  name: section
+                  type: varchar(500)
+              - column:
+                  name: page_number
+                  type: int
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        # A kind decides which of the other columns are set. IS NOT DISTINCT FROM keeps a null
+        # clip_type from making a check pass by accident.
+        - sql:
+            sql: >-
+              ALTER TABLE saves
+              ADD CONSTRAINT saves_kind_check CHECK (kind IN ('HIGHLIGHT', 'CLIP', 'IMPORT')),
+              ADD CONSTRAINT saves_color_check
+                CHECK (color IN ('YELLOW', 'GREEN', 'BLUE', 'PINK', 'PURPLE')),
+              ADD CONSTRAINT saves_color_kind_check CHECK ((color IS NULL) = (kind = 'CLIP')),
+              ADD CONSTRAINT saves_clip_type_check CHECK (clip_type IN ('TABLE', 'IMAGE')),
+              ADD CONSTRAINT saves_clip_type_kind_check
+                CHECK ((clip_type IS NOT NULL) = (kind = 'CLIP')),
+              ADD CONSTRAINT saves_content_md_check
+                CHECK ((content_md IS NOT NULL) = (clip_type IS NOT DISTINCT FROM 'TABLE')),
+              ADD CONSTRAINT saves_image_key_check
+                CHECK ((image_key IS NOT NULL) = (clip_type IS NOT DISTINCT FROM 'IMAGE')),
+              ADD CONSTRAINT saves_page_number_check CHECK (page_number > 0)
+        # Keyset paging for the Library, newest first.
+        - sql:
+            sql: CREATE INDEX saves_user_created_idx ON saves (user_id, created_at DESC, id DESC)
+        # A source's page.
+        - createIndex:
+            tableName: saves
+            indexName: saves_source_idx
+            columns:
+              - column:
+                  name: source_id
+              - column:
+                  name: page_number
+              - column:
+                  name: created_at
+      rollback:
+        - dropTable:
+            tableName: saves

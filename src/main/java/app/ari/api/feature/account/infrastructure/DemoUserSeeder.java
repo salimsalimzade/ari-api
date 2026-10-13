@@ -46,10 +46,12 @@ public class DemoUserSeeder implements ApplicationRunner {
         new User(
             DEMO_USER_ID,
             null,
+            null,
             DEMO_USERNAME,
             passwordEncoder.encode(DEMO_PASSWORD),
             "Demo User",
             LocalDate.of(1990, 1, 1),
+            null,
             Plan.NONE,
             0,
             now,

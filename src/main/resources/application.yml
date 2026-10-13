@@ -1,8 +1,49 @@
 spring:
+  threads:
+    virtual:
+      enabled: true
   datasource:
     url: ${DB_URL:jdbc:postgresql://localhost:5432/ari}
     username: ${DB_USERNAME:ari}
     password: ${DB_PASSWORD}
+  data:
+    redis:
+      url: ${REDIS_URL:redis://localhost:6379}
+  rabbitmq:
+    host: ${RABBITMQ_HOST:localhost}
+    port: ${RABBITMQ_PORT:5672}
+    username: ${RABBITMQ_USERNAME:ari}
+    password: ${RABBITMQ_PASSWORD}
+    # The outbox marks an event sent only after RabbitMQ confirmed it
+    publisher-confirm-type: simple
+  mail:
+    # Mailpit by default; a real provider's values go in .env (examples in .env.example)
+    host: ${MAIL_HOST:localhost}
+    port: ${MAIL_PORT:1025}
+    username: ${MAIL_USERNAME:}
+    password: ${MAIL_PASSWORD:}
+    properties:
+      # Real providers want an encrypted connection: STARTTLS on port 587, or SSL on 465
+      "[mail.smtp.starttls.enable]": ${MAIL_STARTTLS:false}
+      "[mail.smtp.starttls.required]": ${MAIL_STARTTLS:false}
+      "[mail.smtp.ssl.enable]": ${MAIL_SSL:false}
+      # A server that hangs fails the send, which then retries, instead of blocking the consumer
+      "[mail.smtp.connectiontimeout]": 10000
+      "[mail.smtp.timeout]": 10000
+      "[mail.smtp.writetimeout]": 10000
+  servlet:
+    multipart:
+      # Profile photos: the website sends a cropped 512x512 JPEG
+      max-file-size: 2MB
+      max-request-size: 3MB
+  messages:
+    # Email texts (i18n/mail.properties, mail_az.properties)
+    basename: i18n/mail
+    # English when a language has no file, whatever the server's own locale
+    fallback-to-system-locale: false
+  jackson:
+    # Null fields are left out of responses (SKILL.md section 5)
+    default-property-inclusion: non_null
 
 server:
   port: ${SERVER_PORT:8080}
@@ -16,6 +57,19 @@ mybatis:
     arg-name-based-constructor-auto-mapping: true
 
 app:
+  mail:
+    from: ${APP_MAIL_FROM:Ari <no-reply@ari.test>}
+  storage:
+    # MinIO locally (docker compose up -d minio); any S3-compatible server works
+    endpoint: ${STORAGE_ENDPOINT:http://localhost:9000}
+    public-endpoint: ${STORAGE_PUBLIC_ENDPOINT:http://localhost:9000}
+    region: ${STORAGE_REGION:us-east-1}
+    access-key: ${STORAGE_ACCESS_KEY:ari-local}
+    secret-key: ${STORAGE_SECRET_KEY}
+    bucket: ${STORAGE_BUCKET:ari}
+  web:
+    # The website, for links in emails
+    url: ${APP_WEB_URL:http://localhost:3000}
   cors:
     allowed-origins: ${APP_CORS_ALLOWED_ORIGINS:http://localhost:3000}
   # Adds the demo user (demo / demo1234). Local development only.

@@ -26,6 +26,7 @@ ext {
   mybatisVersion = '4.1.0'
   mapstructVersion = '1.6.3'
   archunitVersion = '1.5.1'
+  awsSdkVersion = '2.55.14'
   errorproneVersion = '2.50.0'
   googleJavaFormatVersion = '1.36.1' // 1.37.0 breaks Spotless 8.10.3 (Style enum -> record)
 }
@@ -37,6 +38,14 @@ dependencies {
   implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'
   implementation 'org.springframework.boot:spring-boot-starter-jdbc'
   implementation 'org.springframework.boot:spring-boot-starter-liquibase'
+  implementation 'org.springframework.boot:spring-boot-starter-data-redis'
+  implementation 'org.springframework.boot:spring-boot-starter-amqp'
+  implementation 'org.springframework.boot:spring-boot-starter-mail'
+  implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+  implementation platform("software.amazon.awssdk:bom:${awsSdkVersion}")
+  implementation('software.amazon.awssdk:s3') {
+    exclude module: 'netty-nio-client' // only the async client uses it
+  }
   implementation "org.mybatis.spring.boot:mybatis-spring-boot-starter:${mybatisVersion}"
   implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
   implementation "org.mapstruct:mapstruct:${mapstructVersion}"
@@ -50,6 +59,8 @@ dependencies {
   testImplementation 'org.springframework.boot:spring-boot-starter-security-test'
   testImplementation 'org.springframework.boot:spring-boot-testcontainers'
   testImplementation 'org.testcontainers:testcontainers-postgresql'
+  testImplementation 'org.testcontainers:testcontainers-rabbitmq'
+  testImplementation 'org.testcontainers:testcontainers-minio'
   testImplementation "com.tngtech.archunit:archunit-junit5:${archunitVersion}"
   testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
