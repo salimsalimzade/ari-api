@@ -129,6 +129,8 @@ sequenceDiagram
   included) and `sources` count over the whole Library, so choosing one doesn't make the others
   disappear. A tag no save uses any more is not listed.
 - The Library's `q` search arrives with F10 (full-text search) on the same list endpoint.
+- The reading view (`/library/{id}`) loads one save with `GET /api/v1/saves/{id}`: the same
+  `SaveResponse`, or 404 `NOT_FOUND` when there is no such save or it is someone else's.
 
 ## 4. Save, change and delete a save (F3)
 
@@ -259,21 +261,28 @@ sequenceDiagram
   participant T as Website tab
   participant A as ari-api
   participant R as Redis
-  Note over X,R: Connect once
-  X->>T: Open /extension/connect on the website
-  T->>A: POST /api/v1/auth/extension/code (cookies, signed in)
-  A->>R: Store the code with the user id, 60 s, single use
+  Note over X,R: Connect, on any signed-in page of the website
+  T->>X: postMessage signed-in (the user's id)
+  X->>T: postMessage want-code (not signed in as that user)
+  T->>A: POST /api/v1/me/extension-code (cookies)
+  A->>R: Store the code's hash with the user id, 60 s, single use
   A-->>T: 200 with the code
-  T->>X: The content script on /extension/connect passes the code
+  T->>X: postMessage code
   X->>A: POST /api/v1/auth/extension/token (code)
   A->>R: GETDEL the code
-  alt Missing or expired
-    A-->>X: 401 UNAUTHORIZED
+  alt Missing, expired or used
+    A-->>X: 401 INVALID_CODE
   else Found
     A->>A: Create JWT and refresh token (client EXTENSION)
-    A-->>X: 200 accessToken, refreshToken, expiresIn
+    A-->>X: 200 accessToken, refreshToken
     X->>X: Keep the tokens in browser.storage.local
   end
+  Note over X,R: Or another account, on the website's /extension/sign-in
+  T->>A: POST /api/v1/auth/extension/code (username, password; no cookies change)
+  A-->>T: 200 with the code, or 401 INVALID_CREDENTIALS
+  T->>X: postMessage account-code
+  X->>A: POST /api/v1/auth/extension/token (code), as above
+  X->>T: postMessage connected
   Note over X,R: Save a highlight
   X->>A: POST /api/v1/saves (Bearer token, kind HIGHLIGHT, color, text, tags, source)
   A->>A: Same validation and steps as section 4
@@ -281,14 +290,31 @@ sequenceDiagram
   Note over X,R: Access token expired
   X->>A: POST /api/v1/auth/extension/refresh (refreshToken)
   A-->>X: 200 new pair (same rotation rules as the cookies)
+  Note over X,R: Log out on the website (while it follows it), or in the extension
+  T->>X: postMessage signed-out
+  X->>A: POST /api/v1/auth/extension/logout (refreshToken)
+  A-->>X: 204, the extension's session ends
 ```
 
-- The code is 32 random bytes, base64url-encoded. If the tab is signed out, `/extension/connect`
-  sends the user to `/login` first and then comes back.
+- The code is 32 random bytes, base64url-encoded; Redis keeps only its SHA-256. The website asks
+  for it under `/me` with its cookies, because `/api/v1/auth/**` reads no token. A signed-out tab
+  posts nothing: the extension's Sign in opens `/library`, which goes to `/login` first and back.
+- The messages go through `window.postMessage` to the website's own origin, and the extension's
+  content script takes them only on that origin, so no other site can sign it in as somebody else.
+- By default the extension uses the website's account and follows it: to another account, and out
+  when the website logs out in the same browser. On the website's `/extension/sign-in` it can sign
+  in as any account with a password instead (`POST /auth/extension/code` sets no cookies, and the
+  website stays as it is); it keeps that account, whatever the website does, until it logs out.
+- The extension's session is its own: the website's cookies may expire while it stays signed in.
+  Each refresh gives it 30 more days. Refresh tokens are checked against their client: the cookie refresh
+  takes only `WEB` tokens, the extension's refresh only `EXTENSION` ones, and its 401 clears no
+  cookies.
 - `ari-api` reads the `ari_access` cookie first, then the `Authorization` header, so every endpoint
-  works for the extension.
-- The extension calls `ari-api` from its background script, which has host permission for the API,
-  so it needs no CORS entry.
+  works for the extension. The extension sends no cookies (`credentials: 'omit'`), so its token is
+  the one read.
+- The extension calls `ari-api` from its background script. Firefox sends those requests with
+  `Origin: moz-extension://<uuid>`, a uuid of each install, so CORS allows `moz-extension://*` and
+  `chrome-extension://*` by pattern, without credentials.
 - The extension sends the page's address as `source.url`; a text-fragment jump link may be sent as
   it is, because the `#fragment` is dropped. The link that opens the page at the save is built by
   the website from `source.url` and `text`, so nothing like it is stored. Clips (F14) use the same

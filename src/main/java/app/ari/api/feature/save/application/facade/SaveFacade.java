@@ -24,6 +24,9 @@ public interface SaveFacade {
 
   FacetsResponse facets(UUID userId, SaveFilterRequest filter);
 
+  /** One save with its source and tags; throws {@code SaveNotFoundException}. */
+  SaveResponse get(UUID userId, UUID id);
+
   /** Throws {@code SaveNotFoundException} or {@code InvalidSaveException}. */
   SaveResponse update(UUID userId, UUID id, UpdateSaveRequest request);
 

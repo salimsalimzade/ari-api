@@ -4,6 +4,7 @@ import app.ari.api.feature.account.domain.model.IssuedTokens;
 import app.ari.api.feature.account.domain.model.RefreshToken;
 import app.ari.api.feature.account.domain.model.TokenClient;
 import app.ari.api.feature.account.domain.model.User;
+import app.ari.api.feature.account.domain.repository.ExtensionCodeRepository;
 import app.ari.api.feature.account.domain.repository.RefreshTokenRepository;
 import app.ari.api.feature.account.domain.repository.UserRepository;
 import app.ari.api.feature.account.domain.service.TokenService;
@@ -40,10 +41,16 @@ public class TokenServiceImpl implements TokenService {
    */
   static final Duration REUSE_GRACE = Duration.ofSeconds(10);
 
+  /**
+   * Long enough for the website tab to hand the code to the extension, which redeems it at once.
+   */
+  static final Duration EXTENSION_CODE_LIFETIME = Duration.ofSeconds(60);
+
   private static final Logger log = LoggerFactory.getLogger(TokenServiceImpl.class);
 
   private final JwtEncoder jwtEncoder;
   private final RefreshTokenRepository refreshTokens;
+  private final ExtensionCodeRepository extensionCodes;
   private final UserRepository users;
   private final Clock clock;
   private final SecureRandom random = new SecureRandom();
@@ -51,10 +58,12 @@ public class TokenServiceImpl implements TokenService {
   public TokenServiceImpl(
       JwtEncoder jwtEncoder,
       RefreshTokenRepository refreshTokens,
+      ExtensionCodeRepository extensionCodes,
       UserRepository users,
       Clock clock) {
     this.jwtEncoder = jwtEncoder;
     this.refreshTokens = refreshTokens;
+    this.extensionCodes = extensionCodes;
     this.users = users;
     this.clock = clock;
   }
@@ -66,9 +75,9 @@ public class TokenServiceImpl implements TokenService {
 
   @Override
   @Transactional
-  public Optional<IssuedTokens> rotate(String refreshToken) {
+  public Optional<IssuedTokens> rotate(String refreshToken, TokenClient client) {
     Optional<RefreshToken> found = refreshTokens.findByTokenHash(hash(refreshToken));
-    if (found.isEmpty()) {
+    if (found.isEmpty() || found.get().client() != client) {
       return Optional.empty();
     }
     RefreshToken token = found.get();
@@ -94,6 +103,22 @@ public class TokenServiceImpl implements TokenService {
         .ifPresent(token -> refreshTokens.revokeFamily(token.familyId(), clock.instant()));
   }
 
+  @Override
+  public String issueExtensionCode(UUID userId) {
+    String code = newRandomToken();
+    extensionCodes.save(hash(code), userId, EXTENSION_CODE_LIFETIME);
+    return code;
+  }
+
+  @Override
+  @Transactional
+  public Optional<IssuedTokens> redeemExtensionCode(String code) {
+    return extensionCodes
+        .take(hash(code))
+        .flatMap(users::findById)
+        .map(user -> issue(user, TokenClient.EXTENSION));
+  }
+
   private IssuedTokens issue(User user, TokenClient client, UUID familyId, Instant now) {
     JwtClaimsSet claims =
         JwtClaimsSet.builder()
@@ -107,7 +132,7 @@ public class TokenServiceImpl implements TokenService {
     String accessToken =
         jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
 
-    String refreshToken = newRefreshToken();
+    String refreshToken = newRandomToken();
     refreshTokens.insert(
         new RefreshToken(
             UUID.randomUUID(),
@@ -131,7 +156,8 @@ public class TokenServiceImpl implements TokenService {
         && refreshTokens.hasActiveToken(token.familyId(), now);
   }
 
-  private String newRefreshToken() {
+  /** 32 random bytes, base64url: a refresh token or an extension code. */
+  private String newRandomToken() {
     byte[] bytes = new byte[32];
     random.nextBytes(bytes);
     return Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);

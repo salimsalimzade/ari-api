@@ -3,10 +3,14 @@ package app.ari.api.feature.account.presentation.impl;
 import app.ari.api.feature.account.application.exception.unauthorized.SessionExpiredException;
 import app.ari.api.feature.account.application.facade.AccountFacade;
 import app.ari.api.feature.account.application.model.request.EmailRequest;
+import app.ari.api.feature.account.application.model.request.ExtensionCodeRequest;
+import app.ari.api.feature.account.application.model.request.ExtensionRefreshRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
 import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
+import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
+import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
 import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
@@ -64,6 +68,32 @@ public class AccountControllerImpl implements AccountController {
   public ResponseEntity<Void> logout(String refreshToken) {
     facade.logout(refreshToken);
     return ResponseEntity.noContent().headers(cookies.clear()).build();
+  }
+
+  @Override
+  public ExtensionCodeResponse extensionCode(Jwt jwt) {
+    return facade.extensionCode(userId(jwt));
+  }
+
+  @Override
+  public ExtensionCodeResponse extensionCodeForAccount(@Valid LoginRequest request) {
+    return facade.extensionCode(request);
+  }
+
+  @Override
+  public ExtensionTokensResponse connectExtension(@Valid ExtensionCodeRequest request) {
+    return facade.connectExtension(request);
+  }
+
+  @Override
+  public ExtensionTokensResponse refreshExtension(@Valid ExtensionRefreshRequest request) {
+    return facade.refreshExtension(request);
+  }
+
+  @Override
+  public ResponseEntity<Void> logoutExtension(@Valid ExtensionRefreshRequest request) {
+    facade.logoutExtension(request);
+    return ResponseEntity.noContent().build();
   }
 
   @Override

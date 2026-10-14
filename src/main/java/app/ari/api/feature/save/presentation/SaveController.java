@@ -97,6 +97,16 @@ public interface SaveController {
       @ParameterObject SaveFilterRequest filter);
 
   @Operation(
+      summary = "One save, with its source and tags",
+      description = "For a page that shows a single save, such as the Library's reading view.")
+  @ApiResponse(responseCode = "200", description = "The save")
+  @ApiResponse(responseCode = "401", description = "UNAUTHORIZED")
+  @ApiResponse(responseCode = "404", description = "NOT_FOUND, or it is someone else's")
+  @GetMapping("/{id}")
+  SaveResponse get(
+      @Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt, @PathVariable UUID id);
+
+  @Operation(
       summary = "Change a save's color, comment or tags",
       description = "A field that is left out stays as it is.")
   @ApiResponse(responseCode = "200", description = "The updated save")

@@ -1,11 +1,15 @@
 package app.ari.api.feature.account.application.facade;
 
 import app.ari.api.feature.account.application.model.request.EmailRequest;
+import app.ari.api.feature.account.application.model.request.ExtensionCodeRequest;
+import app.ari.api.feature.account.application.model.request.ExtensionRefreshRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
 import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
 import app.ari.api.feature.account.application.model.response.AuthTokens;
+import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
+import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
 import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
@@ -25,6 +29,29 @@ public interface AccountFacade {
 
   /** Ends the session; a missing or unknown token is ignored. */
   void logout(String refreshToken);
+
+  /**
+   * A one-time code for the signed-in website to hand to the browser extension (F13); throws {@code
+   * SessionExpiredException} when the user no longer exists.
+   */
+  ExtensionCodeResponse extensionCode(UUID userId);
+
+  /**
+   * A one-time code for the extension to sign in as another account than the website's; throws
+   * {@code InvalidCredentialsException} for every mismatch, like {@link #login}.
+   */
+  ExtensionCodeResponse extensionCode(LoginRequest request);
+
+  /**
+   * Swaps the code for the extension's own session; throws {@code InvalidExtensionCodeException}.
+   */
+  ExtensionTokensResponse connectExtension(ExtensionCodeRequest request);
+
+  /** Throws {@code ExtensionSessionExpiredException} when the token is unknown or used up. */
+  ExtensionTokensResponse refreshExtension(ExtensionRefreshRequest request);
+
+  /** Ends the extension's session; an unknown token is ignored. */
+  void logoutExtension(ExtensionRefreshRequest request);
 
   /** Throws {@code SessionExpiredException} when the user no longer exists. */
   MeResponse me(UUID userId);

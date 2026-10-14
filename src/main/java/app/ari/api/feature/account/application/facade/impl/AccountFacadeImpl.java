@@ -8,18 +8,24 @@ import app.ari.api.feature.account.application.exception.conflict.EmailTakenExce
 import app.ari.api.feature.account.application.exception.conflict.UsernameTakenException;
 import app.ari.api.feature.account.application.exception.toomanyrequests.EmailRateLimitedException;
 import app.ari.api.feature.account.application.exception.toomanyrequests.UsernameCheckRateLimitedException;
+import app.ari.api.feature.account.application.exception.unauthorized.ExtensionSessionExpiredException;
 import app.ari.api.feature.account.application.exception.unauthorized.InvalidCredentialsException;
 import app.ari.api.feature.account.application.exception.unauthorized.InvalidEmailCodeException;
+import app.ari.api.feature.account.application.exception.unauthorized.InvalidExtensionCodeException;
 import app.ari.api.feature.account.application.exception.unauthorized.SessionExpiredException;
 import app.ari.api.feature.account.application.facade.AccountFacade;
 import app.ari.api.feature.account.application.mapper.AccountMapper;
 import app.ari.api.feature.account.application.model.message.VerifyEmailMessage;
 import app.ari.api.feature.account.application.model.request.EmailRequest;
+import app.ari.api.feature.account.application.model.request.ExtensionCodeRequest;
+import app.ari.api.feature.account.application.model.request.ExtensionRefreshRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
 import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
 import app.ari.api.feature.account.application.model.response.AuthTokens;
+import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
+import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
 import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
@@ -42,10 +48,11 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 /**
  * Sign-in use cases. Register and login each run in one transaction, so a user is never saved
- * without its session. Refresh and logout get theirs inside {@link TokenService}: a revoked session
- * must stay revoked even though the request then fails with a 401. An email's verify link is queued
- * in the outbox in the same transaction as the pending email. The photo use cases are not one
- * transaction: the file goes to storage first, then a single row update points at it.
+ * without its session. Refresh, logout and the extension's sign-in get theirs inside {@link
+ * TokenService}: a revoked session must stay revoked even though the request then fails with a 401.
+ * An email's verify link is queued in the outbox in the same transaction as the pending email. The
+ * photo use cases are not one transaction: the file goes to storage first, then a single row update
+ * points at it.
  */
 @Service
 public class AccountFacadeImpl implements AccountFacade {
@@ -107,7 +114,7 @@ public class AccountFacadeImpl implements AccountFacade {
       throw new SessionExpiredException();
     }
     return tokenService
-        .rotate(refreshToken)
+        .rotate(refreshToken, TokenClient.WEB)
         .map(mapper::toAuthTokens)
         .orElseThrow(SessionExpiredException::new);
   }
@@ -117,6 +124,41 @@ public class AccountFacadeImpl implements AccountFacade {
     if (StringUtils.hasText(refreshToken)) {
       tokenService.revokeSession(refreshToken);
     }
+  }
+
+  @Override
+  public ExtensionCodeResponse extensionCode(UUID userId) {
+    return new ExtensionCodeResponse(tokenService.issueExtensionCode(currentUser(userId).id()));
+  }
+
+  @Override
+  public ExtensionCodeResponse extensionCode(LoginRequest request) {
+    User user =
+        accountService
+            .authenticate(request.username(), request.password())
+            .orElseThrow(InvalidCredentialsException::new);
+    return new ExtensionCodeResponse(tokenService.issueExtensionCode(user.id()));
+  }
+
+  @Override
+  public ExtensionTokensResponse connectExtension(ExtensionCodeRequest request) {
+    return tokenService
+        .redeemExtensionCode(request.code())
+        .map(mapper::toExtensionTokens)
+        .orElseThrow(InvalidExtensionCodeException::new);
+  }
+
+  @Override
+  public ExtensionTokensResponse refreshExtension(ExtensionRefreshRequest request) {
+    return tokenService
+        .rotate(request.refreshToken(), TokenClient.EXTENSION)
+        .map(mapper::toExtensionTokens)
+        .orElseThrow(ExtensionSessionExpiredException::new);
+  }
+
+  @Override
+  public void logoutExtension(ExtensionRefreshRequest request) {
+    tokenService.revokeSession(request.refreshToken());
   }
 
   @Override

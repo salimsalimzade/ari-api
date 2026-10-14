@@ -475,6 +475,26 @@ class SaveControllerTest {
         .hasSize(2);
   }
 
+  // — One save —
+
+  @Test
+  void findsOneSaveWithItsSourceAndTags() {
+    Account account = signUp();
+    String id = text(create(account, highlight("t", "YELLOW", "[\"b\", \"a\"]", PAGE)), "$.id");
+    create(account, highlight("other", "BLUE", "[]", PAGE));
+
+    MvcTestResult result = get(account, id);
+
+    assertThat(result).hasStatusOk();
+    assertThat(read(result, "$.id")).isEqualTo(id);
+    assertThat(read(result, "$.text")).isEqualTo("t");
+    assertThat(read(result, "$.color")).isEqualTo("YELLOW");
+    assertThat(JsonPath.<List<String>>read(body(result), "$.tags")).containsExactly("a", "b");
+    assertThat(read(result, "$.source.url")).isEqualTo(PAGE);
+    assertThat(read(result, "$.createdAt")).isNotNull();
+    assertThat(get(account, UUID.randomUUID().toString())).hasStatus(HttpStatus.NOT_FOUND);
+  }
+
   // — Changing and removing —
 
   @Test
@@ -576,6 +596,7 @@ class SaveControllerTest {
     String id = text(create(ada, highlight("ada's", "BLUE", "[\"private\"]", PAGE)), "$.id");
     create(grace, highlight("grace's", "BLUE", "[]", PAGE));
 
+    assertThat(get(grace, id)).hasStatus(HttpStatus.NOT_FOUND);
     assertThat(update(grace, id, "{\"comment\": \"mine now\"}")).hasStatus(HttpStatus.NOT_FOUND);
     assertThat(delete(grace, id)).hasStatus(HttpStatus.NOT_FOUND);
     assertThat(texts(list(grace, ""))).containsExactly("grace's");
@@ -595,6 +616,8 @@ class SaveControllerTest {
                 .contentType(MediaType.APPLICATION_JSON)
                 .content(highlight("t", "BLUE", "[]", PAGE))
                 .exchange())
+        .hasStatus(HttpStatus.UNAUTHORIZED);
+    assertThat(mvc.get().uri("/api/v1/saves/" + UUID.randomUUID()).exchange())
         .hasStatus(HttpStatus.UNAUTHORIZED);
     assertThat(mvc.delete().uri("/api/v1/saves/" + UUID.randomUUID()).exchange())
         .hasStatus(HttpStatus.UNAUTHORIZED);
@@ -633,6 +656,7 @@ class SaveControllerTest {
     assertThat(JsonPath.<Object>read(json, "$.paths['/api/v1/saves'].post.requestBody.content"))
         .asInstanceOf(InstanceOfAssertFactories.MAP)
         .containsOnlyKeys("application/json", "multipart/form-data");
+    assertThat(JsonPath.<Object>read(json, "$.paths['/api/v1/saves/{id}'].get")).isNotNull();
     assertThat(JsonPath.<Object>read(json, "$.paths['/api/v1/saves/{id}'].patch")).isNotNull();
     assertThat(JsonPath.<Object>read(json, "$.paths['/api/v1/saves/{id}'].delete")).isNotNull();
   }
@@ -710,6 +734,13 @@ class SaveControllerTest {
   private MvcTestResult facets(Account account, String query) {
     return mvc.get()
         .uri("/api/v1/saves/facets?" + query)
+        .cookie(new Cookie(ACCESS, account.accessToken()))
+        .exchange();
+  }
+
+  private MvcTestResult get(Account account, String id) {
+    return mvc.get()
+        .uri("/api/v1/saves/" + id)
         .cookie(new Cookie(ACCESS, account.accessToken()))
         .exchange();
   }

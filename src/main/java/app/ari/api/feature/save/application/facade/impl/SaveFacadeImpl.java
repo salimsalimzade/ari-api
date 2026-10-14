@@ -103,6 +103,13 @@ public class SaveFacadeImpl implements SaveFacade {
   }
 
   @Override
+  public SaveResponse get(UUID userId, UUID id) {
+    TaggedSave tagged = saveService.find(userId, id).orElseThrow(SaveNotFoundException::new);
+    UUID sourceId = tagged.save().sourceId();
+    return toResponse(tagged, sources.findAll(userId, Set.of(sourceId)).get(sourceId));
+  }
+
+  @Override
   @Transactional
   public SaveResponse update(UUID userId, UUID id, UpdateSaveRequest request) {
     Save save = saveService.findById(userId, id).orElseThrow(SaveNotFoundException::new);

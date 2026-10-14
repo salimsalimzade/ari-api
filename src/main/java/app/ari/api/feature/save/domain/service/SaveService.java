@@ -24,6 +24,9 @@ public interface SaveService {
   /** Empty when there is no such save, or it is someone else's. */
   Optional<Save> findById(UUID userId, UUID id);
 
+  /** The save with its tags; empty when there is no such save, or it is someone else's. */
+  Optional<TaggedSave> find(UUID userId, UUID id);
+
   /** Applies the edit; the caller has checked {@link SaveChange#violationFor(Save)}. */
   TaggedSave update(Save save, SaveChange change);
 

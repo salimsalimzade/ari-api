@@ -119,7 +119,7 @@ ari-api/
     │       │   │   └── service/        # SaveService + impl/SaveServiceImpl (also stores image clips through ObjectStorage)
     │       │   └── infrastructure/     # SaveMyBatisRepository, TagMyBatisRepository (@Mapper extending the ports)
     │       ├── source/                 # built: the page or file a save came from; facade only, no endpoints yet (the Sources page comes next)
-    │       ├── account/                # built: sign-in (password), sessions, GET /me
+    │       ├── account/                # built: sign-in (password), sessions, the extension's sign-in code, GET /me
     │       ├── mail/                   # listener → facade → MailService; ports for Thymeleaf and SMTP in domain/port; reads no table
     │       ├── fileimport/             # same layout as save; returns a fake finished job ("import" is a Java keyword)
     │       └── outbox/                 # OutboxFacade.add in the caller's transaction; a scheduler sends every second
@@ -159,7 +159,9 @@ Rules:
 - Records for DTOs, constructor injection, an injected `Clock`, UUID ids, all times in UTC.
 - **CORS:** allow the frontend's origin with credentials (the sign-in cookies), read from
   `app.cors.allowed-origins` in `application.yml`, which takes `APP_CORS_ALLOWED_ORIGINS`
-  (comma-separated; default `http://localhost:3000`).
+  (comma-separated; default `http://localhost:3000`). Extension origins (`moz-extension://*`,
+  `chrome-extension://*`; Firefox gives each install its own uuid) are allowed by pattern,
+  without credentials: the extension sends its Bearer token, never cookies.
 - **Sign-in:** every endpoint except `/api/v1/auth/**`, health and Swagger needs a signed-in user;
   read their id from `@AuthenticationPrincipal Jwt` (`jwt.getSubject()`). The cookie and token
   rules are in `docs/architecture.md`.
@@ -203,6 +205,11 @@ enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 | `POST /auth/login` `{ username, password }` | `account` | 200 + `MeResponse` + both cookies; 401 `INVALID_CREDENTIALS` |
 | `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears both |
 | `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears both cookies |
+| `POST /me/extension-code` | `account` | 200 `{ code }`: the signed-in website's code for the extension (F13), 60 seconds, single use, its SHA-256 in Redis |
+| `POST /auth/extension/code` `{ username, password }` | `account` | 200 `{ code }` for that account, no cookies: the website's extension sign-in page, so the extension can use another account than the website; 401 `INVALID_CREDENTIALS` |
+| `POST /auth/extension/token` `{ code }` | `account` | 200 `{ accessToken, refreshToken }` as JSON, no cookies: the extension's own session (`client EXTENSION`); 401 `INVALID_CODE` |
+| `POST /auth/extension/refresh` `{ refreshToken }` | `account` | 200 new pair, the cookie rotation rules; only `EXTENSION` tokens; 401 `UNAUTHORIZED`, clearing no cookies |
+| `POST /auth/extension/logout` `{ refreshToken }` | `account` | 204, ends the extension's session; the website's stays |
 | `GET /me` | `account` | The signed-in user (plan `NONE` until the trial starts, `savesCount` for the sidebar, `email` verified and `pendingEmail` waiting); 401 when signed out |
 | `PUT /me` `{ username, fullName, birthDate }` | `account` | 200 + `MeResponse`; the sign-up rules; 409 `USERNAME_TAKEN` in any case |
 | `PUT /me/photo` (multipart `photo`) | `account` | 200 + `MeResponse` with `photoUrl` (signed, an hour); JPEG, PNG or WebP by its bytes, at most 2 MB: 400 `INVALID_PHOTO`, 413 `FILE_TOO_LARGE`; the old photo is deleted |
@@ -215,6 +222,7 @@ enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 | `POST /saves` (multipart: `save` JSON part, `image` part) | `save` | An image clip (`kind CLIP`, `clipType IMAGE`): a JPEG, PNG or WebP of at most 2 MB, stored in MinIO first. 201 + `SaveResponse` with `imageUrl`; 400 `INVALID_IMAGE`, 413 `FILE_TOO_LARGE` |
 | `GET /saves?type=&tag=&color=&source=&cursor=&limit=` | `save` | The signed-in user's saves, newest first, 40 per page (`limit` 1 to 100); `tag`, `color` and `source` repeat; any value within a group, every group given. `PageResponse<SaveResponse>`; 400 `INVALID_CURSOR` |
 | `GET /saves/facets?type=&tag=&color=&source=` | `save` | Type tab counts (among the saves that match the filters) and the tag, color and source choices with their counts (whole Library) |
+| `GET /saves/{id}` | `save` | One save with its source and tags (`SaveResponse`), for the website's reading view; 404 `NOT_FOUND`, also for someone else's |
 | `PATCH /saves/{id}` `{ color, comment, tags }` | `save` | A field left out stays; `tags` replaces them all. 200 + `SaveResponse`; 404 `NOT_FOUND`; 400 `INVALID_SAVE` for a color on a clip |
 | `DELETE /saves/{id}` | `save` | 204; its image is deleted after the commit; `users.saves_count` follows; 404 `NOT_FOUND` |
 | `POST /imports` (multipart `file`) | `fileimport` | Ignores the file content; returns a `DONE` job with 0 highlights |

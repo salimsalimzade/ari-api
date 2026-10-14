@@ -82,8 +82,9 @@ services:
       DB_URL: jdbc:postgresql://postgres:5432/${DB_NAME:-ari}
       REDIS_URL: redis://redis:6379
       RABBITMQ_HOST: rabbitmq
-      # Mailpit inside compose; with a real provider, set MAIL_DOCKER_HOST to its host in .env
-      MAIL_HOST: ${MAIL_DOCKER_HOST:-mailpit}
+      # Mailpit inside compose unless .env sets MAIL_HOST for a real provider (MAIL_DOCKER_HOST
+      # still wins when the host differs from inside the container)
+      MAIL_HOST: ${MAIL_DOCKER_HOST:-${MAIL_HOST:-mailpit}}
       STORAGE_ENDPOINT: http://minio:9000
       # Signed photo links are opened by the browser, which reaches MinIO on localhost
       STORAGE_PUBLIC_ENDPOINT: http://localhost:9000

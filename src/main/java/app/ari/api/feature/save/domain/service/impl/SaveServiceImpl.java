@@ -96,6 +96,16 @@ public class SaveServiceImpl implements SaveService {
   }
 
   @Override
+  public Optional<TaggedSave> find(UUID userId, UUID id) {
+    return saves
+        .findById(userId, id)
+        .map(
+            save ->
+                new TaggedSave(
+                    save, tagNames(List.of(save.id())).getOrDefault(save.id(), List.of())));
+  }
+
+  @Override
   public TaggedSave update(Save save, SaveChange change) {
     Instant now = now();
     Save changed =

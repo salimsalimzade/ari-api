@@ -1,10 +1,14 @@
 package app.ari.api.feature.account.presentation;
 
 import app.ari.api.feature.account.application.model.request.EmailRequest;
+import app.ari.api.feature.account.application.model.request.ExtensionCodeRequest;
+import app.ari.api.feature.account.application.model.request.ExtensionRefreshRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
 import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
+import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
+import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
 import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
 import app.ari.api.feature.account.presentation.cookie.AuthCookies;
@@ -35,7 +39,9 @@ import org.springframework.web.multipart.MultipartFile;
     name = "Account",
     description =
         "Sign-in and the signed-in user. Signing in sets two httpOnly cookies: ari_access (JWT, 15"
-            + " minutes) and ari_refresh (30 days, replaced on every refresh).")
+            + " minutes) and ari_refresh (30 days, replaced on every refresh). The browser"
+            + " extension has a session of its own: its tokens travel as JSON and Authorization:"
+            + " Bearer, never as cookies.")
 @RequestMapping("/api/v1")
 public interface AccountController {
 
@@ -97,6 +103,56 @@ public interface AccountController {
   ResponseEntity<Void> logout(
       @Parameter(hidden = true) @CookieValue(name = AuthCookies.REFRESH, required = false)
           String refreshToken);
+
+  @Operation(
+      summary = "A code that signs the browser extension in",
+      description =
+          "For the signed-in website, which hands the code to the extension in the same browser."
+              + " It works once, within 60 seconds.")
+  @ApiResponse(responseCode = "200", description = "The code")
+  @ApiResponse(responseCode = "401", description = "UNAUTHORIZED")
+  @PostMapping("/me/extension-code")
+  ExtensionCodeResponse extensionCode(@Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt);
+
+  @Operation(
+      summary = "A code that signs the browser extension in as another account",
+      description =
+          "For the website's extension sign-in page: the extension can use another account than"
+              + " the website, whose cookies stay as they are. The code works once, within 60"
+              + " seconds.")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "200", description = "The code; no cookies are set")
+  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @ApiResponse(responseCode = "401", description = "INVALID_CREDENTIALS")
+  @PostMapping("/auth/extension/code")
+  ExtensionCodeResponse extensionCodeForAccount(@Valid @RequestBody LoginRequest request);
+
+  @Operation(
+      summary = "Swap the website's code for the extension's tokens",
+      description =
+          "Starts the extension's own session, as the user who asked for the code. It lasts while"
+              + " the extension refreshes at least every 30 days, or until it signs out.")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "200", description = "The extension's tokens")
+  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @ApiResponse(responseCode = "401", description = "INVALID_CODE: unknown, expired or used code")
+  @PostMapping("/auth/extension/token")
+  ExtensionTokensResponse connectExtension(@Valid @RequestBody ExtensionCodeRequest request);
+
+  @Operation(summary = "Replace the extension's tokens using its refresh token")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "200", description = "A new pair; the old refresh token is used up")
+  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @ApiResponse(responseCode = "401", description = "UNAUTHORIZED: sign the extension in again")
+  @PostMapping("/auth/extension/refresh")
+  ExtensionTokensResponse refreshExtension(@Valid @RequestBody ExtensionRefreshRequest request);
+
+  @Operation(summary = "Sign the extension out: end its session")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "204", description = "Signed out")
+  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @PostMapping("/auth/extension/logout")
+  ResponseEntity<Void> logoutExtension(@Valid @RequestBody ExtensionRefreshRequest request);
 
   @Operation(summary = "The signed-in user")
   @ApiResponse(responseCode = "200", description = "The signed-in user")

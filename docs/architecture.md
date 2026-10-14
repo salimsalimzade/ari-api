@@ -52,7 +52,8 @@ Key decisions:
 
 - `ari-api` is a JSON API with three callers: the `ari` server while it renders pages (it forwards
   the browser's cookies), the browser after hydration (cookies, with CORS allowing the web origin
-  and credentials), and the extension (F13, `Authorization: Bearer`).
+  and credentials), and the extension (F13, `Authorization: Bearer`, with CORS allowing extension
+  origins without credentials).
 - Only `ari-api` talks to PostgreSQL and receives Paddle webhooks. Only the webhook changes a user's
   plan.
 - **Redis 8** has the Bloom filter built in (`BF.*` commands, sent through Spring Data Redis's
@@ -162,7 +163,8 @@ Every value comes from an environment variable (locally from `.env`, see `.env.e
 | Stored secrets | Only the SHA-256 hash of a refresh token |
 | Logout | `POST /api/v1/auth/logout` revokes the session and clears both cookies (always 204) |
 | Stale cookies | The sign-in endpoints (`/api/v1/auth/**`) ignore `ari_access`, so an old cookie never blocks signing in |
-| Extension | Same token rules, but the tokens travel in JSON bodies and `Authorization: Bearer`, never in cookies. Its refresh tokens are stored with `client = EXTENSION` |
+| Extension | Same token rules, but the tokens travel in JSON bodies and `Authorization: Bearer`, never in cookies. It signs in with a code the signed-in website gets from `POST /api/v1/me/extension-code`, or that `POST /api/v1/auth/extension/code` gives for another account's username and password without setting cookies (60 seconds, single use, only its SHA-256 in Redis), swapped at `POST /api/v1/auth/extension/token`; then `/auth/extension/refresh` and `/auth/extension/logout` take the refresh token in the body ([sequences §6](sequences.md#6-save-from-the-extension-f13)). Its refresh tokens are stored with `client = EXTENSION`, and each refresh endpoint takes only its own client's tokens |
+| Extension CORS | Firefox sends `Origin: moz-extension://<uuid>`, a uuid of each install, so `moz-extension://*` and `chrome-extension://*` are allowed by pattern, without credentials |
 
 ## 4. Error codes
 
@@ -173,7 +175,7 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 | `VALIDATION_FAILED` | 400 | Bad body, query or upload (file type or size) |
 | `UNAUTHORIZED` | 401 | Missing, expired or invalid token, sign-in code or webhook signature |
 | `INVALID_CREDENTIALS` | 401 | Wrong username or password |
-| `INVALID_CODE` | 401 | An email's verify link is unknown, expired or used, or a newer address is waiting for its link |
+| `INVALID_CODE` | 401 | An email's verify link, or the extension's sign-in code, is unknown, expired or used; or a newer address is waiting for its link |
 | `NOT_FOUND` | 404 | The item does not exist or belongs to another user |
 | `INVALID_SAVE` | 400 | A save breaks the rules of its kind: a highlight without a color, a clip with one or without a clip type, a table clip without Markdown, an image clip without its image, an `IMPORT` posted directly; or a color set on a clip |
 | `INVALID_IMAGE` | 400 | A clip's image isn't a JPEG, PNG or WebP by its bytes, or is over 2 MB |
@@ -210,14 +212,16 @@ first real module; copy its patterns.
 **F1 Sign in**
 
 - `config/SecurityConfig`, API chain: stateless, CSRF off (`SameSite=Lax` cookies plus CORS), CORS
-  with credentials for `APP_CORS_ALLOWED_ORIGINS`. Public: `/api/v1/auth/**`, `/actuator/health`,
+  with credentials for `APP_CORS_ALLOWED_ORIGINS` and without for extension origins
+  (`config/CorsConfig`). Public: `/api/v1/auth/**`, `/actuator/health`,
   Swagger and `/error`. Everything else needs a valid JWT; a missing or bad one gets a 401 Problem
   Detail from `ProblemDetailsAuthenticationEntryPoint`.
 - JWTs: `NimbusJwtEncoder` / `NimbusJwtDecoder`, HS256 with `APP_JWT_SECRET`, issuer `ari-api`.
   The decoder checks expiry with the injected `Clock`. `CookieBearerTokenResolver` reads
   `ari_access`, then the `Authorization` header, and nothing on `/api/v1/auth/**`.
-- `TokenService` creates and rotates tokens; `AccountControllerImpl` turns them into cookies through
-  `AuthCookies`.
+- `TokenService` creates and rotates tokens, and the extension's sign-in codes
+  (`ExtensionCodeRedisRepository`); `AccountControllerImpl` turns the website's tokens into cookies
+  through `AuthCookies` and sends the extension's as JSON.
 - `DemoUserSeeder` adds the demo user when `APP_SEED_DEMO_DATA=true`, so production never has one.
 
 ### Tests that prove it works
@@ -230,4 +234,9 @@ running):
   Bearer header and is 401 without one or after 15 minutes; refresh rotates; a replaced token works
   for 10 seconds and then revokes its session; logout clears the cookies and ends the session; a
   stale cookie doesn't block login; the CORS preflight allows credentials.
+- `ExtensionSignInTest` (F13): the website's code signs the extension in once and sets no cookies;
+  another account's password gives a code without touching the website's cookies, a wrong one 401
+  `INVALID_CREDENTIALS`; a code needs a signed-in website; the extension refreshes its own tokens with reuse detection;
+  website and extension refresh tokens don't mix; extension logout leaves the website signed in;
+  CORS lets `moz-extension://` origins in without credentials and keeps other origins out.
 - `AriApiApplicationTests`: Liquibase creates the tables, health is UP. `ArchitectureTest`: the layer rules from SKILL.md.

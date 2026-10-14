@@ -56,6 +56,11 @@ public class SaveControllerImpl implements SaveController {
   }
 
   @Override
+  public SaveResponse get(Jwt jwt, UUID id) {
+    return facade.get(userId(jwt), id);
+  }
+
+  @Override
   public SaveResponse update(Jwt jwt, UUID id, @Valid UpdateSaveRequest request) {
     return facade.update(userId(jwt), id, request);
   }
