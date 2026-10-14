@@ -48,6 +48,12 @@ public class GlobalExceptionHandler extends ResponseEntityExceptionHandler {
     return problem(HttpStatus.CONFLICT, ex.getCode(), ex.getMessage());
   }
 
+  /** An upload over its own limit, below the servlet's multipart limit. */
+  @ExceptionHandler(PayloadTooLargeException.class)
+  public ProblemDetail handlePayloadTooLarge(PayloadTooLargeException ex) {
+    return problem(HttpStatus.CONTENT_TOO_LARGE, ex.getCode(), ex.getMessage());
+  }
+
   @ExceptionHandler(TooManyRequestsException.class)
   public ProblemDetail handleTooManyRequests(TooManyRequestsException ex) {
     return problem(HttpStatus.TOO_MANY_REQUESTS, ex.getCode(), ex.getMessage());

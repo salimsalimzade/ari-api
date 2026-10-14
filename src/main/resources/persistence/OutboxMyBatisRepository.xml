@@ -29,4 +29,24 @@
   <delete id="deleteSentBefore">
     DELETE FROM outbox_events WHERE sent_at &lt; #{before}
   </delete>
+
+  <select id="isProcessed" resultType="boolean">
+    SELECT EXISTS (
+      SELECT 1 FROM processed_events WHERE consumer = #{consumer} AND event_id = #{eventId})
+  </select>
+
+  <!-- A second record of the same event inserts nothing, and says so. -->
+  <select id="insertProcessed" resultType="boolean" flushCache="true">
+    WITH inserted AS (
+      INSERT INTO processed_events (consumer, event_id, processed_at)
+      VALUES (#{consumer}, #{eventId}, #{at})
+      ON CONFLICT DO NOTHING
+      RETURNING 1
+    )
+    SELECT EXISTS (SELECT 1 FROM inserted)
+  </select>
+
+  <delete id="deleteProcessedBefore">
+    DELETE FROM processed_events WHERE processed_at &lt; #{before}
+  </delete>
 </mapper>

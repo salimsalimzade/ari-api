@@ -33,9 +33,10 @@ spring:
       "[mail.smtp.writetimeout]": 10000
   servlet:
     multipart:
-      # Profile photos: the website sends a cropped 512x512 JPEG
-      max-file-size: 2MB
-      max-request-size: 3MB
+      # Imported files, up to the whole 50 MB upload space; profile photos and image clips check
+      # their own 2 MB limit
+      max-file-size: 50MB
+      max-request-size: 51MB
   messages:
     # Email texts (i18n/mail.properties, mail_az.properties)
     basename: i18n/mail

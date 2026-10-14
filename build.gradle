@@ -27,6 +27,8 @@ ext {
   mapstructVersion = '1.6.3'
   archunitVersion = '1.5.1'
   awsSdkVersion = '2.55.14'
+  pdfboxVersion = '3.0.8'
+  poiVersion = '5.5.1'
   errorproneVersion = '2.50.0'
   googleJavaFormatVersion = '1.36.1' // 1.37.0 breaks Spotless 8.10.3 (Style enum -> record)
 }
@@ -47,6 +49,9 @@ dependencies {
     exclude module: 'netty-nio-client' // only the async client uses it
   }
   implementation "org.mybatis.spring.boot:mybatis-spring-boot-starter:${mybatisVersion}"
+  // Reading imported files: PDF annotations and Word highlights and comments
+  implementation "org.apache.pdfbox:pdfbox:${pdfboxVersion}"
+  implementation "org.apache.poi:poi-ooxml:${poiVersion}"
   implementation "org.springdoc:springdoc-openapi-starter-webmvc-ui:${springdocVersion}"
   implementation "org.mapstruct:mapstruct:${mapstructVersion}"
   annotationProcessor "org.mapstruct:mapstruct-processor:${mapstructVersion}"

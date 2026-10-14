@@ -2,26 +2,32 @@ package app.ari.api.feature.save.application.facade.impl;
 
 import app.ari.api.common.response.PageResponse;
 import app.ari.api.common.transaction.AfterCommit;
+import app.ari.api.common.transaction.OnRollback;
 import app.ari.api.feature.account.application.facade.AccountFacade;
 import app.ari.api.feature.save.application.exception.badrequest.InvalidClipImageException;
 import app.ari.api.feature.save.application.exception.badrequest.InvalidCursorException;
 import app.ari.api.feature.save.application.exception.badrequest.InvalidSaveException;
 import app.ari.api.feature.save.application.exception.notfound.SaveNotFoundException;
+import app.ari.api.feature.save.application.exception.payloadtoolarge.ClipImageTooLargeException;
 import app.ari.api.feature.save.application.facade.SaveFacade;
 import app.ari.api.feature.save.application.mapper.SaveMapper;
 import app.ari.api.feature.save.application.model.request.CreateSaveRequest;
+import app.ari.api.feature.save.application.model.request.ImportedSaveRequest;
 import app.ari.api.feature.save.application.model.request.ListSavesRequest;
 import app.ari.api.feature.save.application.model.request.SaveFilterRequest;
 import app.ari.api.feature.save.application.model.request.UpdateSaveRequest;
 import app.ari.api.feature.save.application.model.response.FacetsResponse;
 import app.ari.api.feature.save.application.model.response.SaveResponse;
 import app.ari.api.feature.save.domain.model.ClipImage;
+import app.ari.api.feature.save.domain.model.ClipType;
+import app.ari.api.feature.save.domain.model.HighlightColor;
 import app.ari.api.feature.save.domain.model.NewSave;
 import app.ari.api.feature.save.domain.model.Save;
 import app.ari.api.feature.save.domain.model.SaveChange;
 import app.ari.api.feature.save.domain.model.SaveCursor;
 import app.ari.api.feature.save.domain.model.SaveFacets;
 import app.ari.api.feature.save.domain.model.SaveFilter;
+import app.ari.api.feature.save.domain.model.SaveKind;
 import app.ari.api.feature.save.domain.model.SaveOrder;
 import app.ari.api.feature.save.domain.model.SavePage;
 import app.ari.api.feature.save.domain.model.SourceCount;
@@ -29,6 +35,7 @@ import app.ari.api.feature.save.domain.model.TaggedSave;
 import app.ari.api.feature.save.domain.service.SaveService;
 import app.ari.api.feature.source.application.facade.SourceFacade;
 import app.ari.api.feature.source.application.model.response.SourceResponse;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
@@ -63,6 +70,10 @@ public class SaveFacadeImpl implements SaveFacade {
   @Override
   @Transactional
   public SaveResponse create(UUID userId, CreateSaveRequest request, byte[] image) {
+    // The servlet takes uploads up to 50 MB, for imported files.
+    if (image != null && image.length > ClipImage.MAX_BYTES) {
+      throw new ClipImageTooLargeException();
+    }
     ClipImage clipImage =
         image == null ? null : ClipImage.of(image).orElseThrow(InvalidClipImageException::new);
     NewSave newSave = mapper.toNewSave(request);
@@ -73,8 +84,49 @@ public class SaveFacadeImpl implements SaveFacade {
     SourceResponse source = sources.saveWebsite(userId, request.source());
     accounts.changeSavesCount(userId, 1);
     // Last: it may store the image, which nothing after it could take back.
-    TaggedSave created = saveService.create(userId, source.id(), newSave, clipImage);
+    TaggedSave created = saveService.create(userId, source.id(), newSave, clipImage, null);
     return toResponse(created, source);
+  }
+
+  @Override
+  @Transactional
+  public List<UUID> createImported(UUID userId, UUID sourceId, List<ImportedSaveRequest> requests) {
+    List<UUID> ids = new ArrayList<>();
+    for (ImportedSaveRequest request : requests) {
+      ClipImage picture =
+          request.image() == null
+              ? null
+              : ClipImage.of(request.image()).orElseThrow(InvalidClipImageException::new);
+      NewSave newSave =
+          picture == null
+              ? new NewSave(
+                  SaveKind.IMPORT,
+                  HighlightColor.valueOf(request.color()),
+                  null,
+                  request.text(),
+                  null,
+                  request.comment(),
+                  null,
+                  request.tags())
+              : new NewSave(
+                  SaveKind.CLIP,
+                  null,
+                  ClipType.IMAGE,
+                  request.text(),
+                  null,
+                  request.comment(),
+                  null,
+                  request.tags());
+      Save created =
+          saveService.create(userId, sourceId, newSave, picture, request.pageNumber()).save();
+      // The pictures are stored as they go; a later failure takes them back.
+      if (created.imageKey() != null) {
+        OnRollback.run(() -> saveService.discardImage(created));
+      }
+      ids.add(created.id());
+    }
+    accounts.changeSavesCount(userId, ids.size());
+    return ids;
   }
 
   @Override

@@ -207,10 +207,11 @@ sequenceDiagram
   participant Q as RabbitMQ
   participant C as Import consumer
   B->>A: POST /api/v1/imports (multipart file)
-  A->>A: Check the type (PDF or DOCX) and size, else 400 VALIDATION_FAILED
+  A->>A: Check the size and the type by its bytes (PDF or DOCX), else 413 FILE_TOO_LARGE or 400 UNSUPPORTED_FILE
+  A->>D: Lock the user row, check the upload space, else 400 NO_SPACE_LEFT
   A->>S: PUT imports/{userId}/{importId}
-  A->>D: One transaction: lock the user row, check the upload space, INSERT imports (QUEUED), INSERT outbox_events (import.process)
-  Note over A,S: No space or the transaction fails: DELETE the file, 400 VALIDATION_FAILED
+  A->>D: Same transaction: INSERT imports (QUEUED), INSERT outbox_events (import.process)
+  Note over A,S: The transaction fails: DELETE the file
   A-->>B: 202 ImportResponse (QUEUED)
   loop Every second
     P->>D: SELECT unsent rows FOR UPDATE SKIP LOCKED
@@ -224,7 +225,7 @@ sequenceDiagram
   C->>S: GET the file
   C->>C: PDFBox reads PDF annotations, POI reads DOCX highlights and comments, with pages and colors
   alt Marks found
-    C->>S: PUT marks/{userId}/{markId}.webp, a picture of each DRAWN or HANDWRITTEN mark
+    C->>S: PUT marks/{userId}/{markId}.png, a picture of each DRAWN or HANDWRITTEN mark
     C->>D: One transaction: INSERT sources (FILE, title and author from the file), INSERT import_marks, status READY, INSERT processed_events
     C->>S: DELETE the file
     C->>Q: ack
@@ -236,13 +237,15 @@ sequenceDiagram
     C->>Q: Reject, retry after 2 s, then 10 s, then 60 s
     Note over C,Q: Fourth failure: status FAILED with error_code, the message goes<br/>to import.process.dlq, the file stays in MinIO for Retry
   end
-  loop Every 2 seconds while QUEUED or READING
-    B->>A: GET /api/v1/imports/{id}
-    A-->>B: 200 ImportResponse (status, and the marks once READY)
+  loop Every 2 seconds while a file is QUEUED or READING
+    B->>A: GET /api/v1/imports
+    A-->>B: 200 ImportsResponse (each file's status and counts, the upload space)
   end
+  B->>A: GET /api/v1/imports/{id}
+  A-->>B: 200 ImportResponse with its marks (READY or SAVED)
   B->>A: PUT /api/v1/imports/{id}/review (title, author, tag, color, ticked mark ids)
   A->>D: One transaction: update the source, INSERT saves for newly ticked marks, DELETE saves of unticked ones, set import_marks.save_id, saves_count, status SAVED
-  A-->>B: 200 (added, removed)
+  A-->>B: 200 ReviewResponse (added, removed, sourceId)
 ```
 
 ```mermaid
@@ -605,7 +608,7 @@ flowchart LR
   subgraph files["MinIO, private bucket ari"]
     avatars["avatars/{userId}/{photoId}.jpg"]
     imports["imports/{userId}/{importId}"]
-    marks["marks/{userId}/{markId}.webp"]
+    marks["marks/{userId}/{markId}.png"]
     saves["saves/{userId}/{saveId}.webp"]
   end
   username -- "BF.ADD, nightly rebuild" --> bloom

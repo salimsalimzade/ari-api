@@ -18,7 +18,6 @@ import org.springframework.stereotype.Service;
 @Service
 public class PhotoServiceImpl implements PhotoService {
 
-  private static final int MAX_BYTES = 2 * 1024 * 1024;
   private static final Duration LINK_LIFETIME = Duration.ofHours(1);
 
   private final UserRepository users;

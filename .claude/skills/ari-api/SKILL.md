@@ -5,7 +5,7 @@ description: Setup guide and roadmap for ari-api, the Java / Spring Boot backend
 
 # ari-api: backend setup guide and roadmap
 
-Last updated 2026-10-14. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
+Last updated 2026-10-15. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
 
 - **ari-api** (this repo): the Java / Spring Boot backend.
 - **ari**: the frontend (SolidStart website now, browser extension later). It calls this API from
@@ -63,6 +63,7 @@ class `AriApiApplication`.
 | `spring-boot-starter-data-redis` | Verify-link codes and rate limits (`StringRedisTemplate`); tests run a `redis:8` container |
 | `spring-boot-starter-amqp`, `testcontainers-rabbitmq` | The outbox publisher (publisher confirms) and the consumers; tests run a `rabbitmq:4` container |
 | `software.amazon.awssdk:s3` (BOM `awsSdkVersion`, without the Netty async client), `testcontainers-minio` | `ObjectStorage`: files in MinIO through the S3 API, signed links for images; tests run the same MinIO image |
+| `pdfbox` (3.x), `poi-ooxml` (5.x) | The import consumer's readers: PDF annotations (and pictures of drawn marks), Word highlights and comments |
 | `spring-boot-starter-mail`, `spring-boot-starter-thymeleaf` | The mail sender: SMTP, and the email templates (HTML plus a plain-text version); tests catch emails in an `axllent/mailpit` container |
 | `springdoc-openapi-starter-webmvc-ui` (the version line for Boot 4) | Swagger UI and `/v3/api-docs` |
 | `mapstruct` + `mapstruct-processor` | Mapping between domain models and request/response DTOs |
@@ -122,7 +123,7 @@ ari-api/
     │       ├── note/                   # built: the Notes page (notes, note_blocks); quotes go through SaveFacade
     │       ├── account/                # built: sign-in (password), sessions, the extension's sign-in code, GET /me
     │       ├── mail/                   # listener → facade → MailService; ports for Thymeleaf and SMTP in domain/port; reads no table
-    │       ├── fileimport/             # same layout as save; returns a fake finished job ("import" is a Java keyword)
+    │       ├── fileimport/             # built: uploads, the import.process consumer (presentation/listener), PDFBox and POI readers behind domain/port/MarkReader, the review ("import" is a Java keyword)
     │       └── outbox/                 # OutboxFacade.add in the caller's transaction; a scheduler sends every second
     ├── main/resources/
     │   ├── application.yml · application-dev.yml   # application-prod.yml later
@@ -204,7 +205,14 @@ public record SourceCountsResponse(int total, List<KindCount> kinds) {} // KindC
 public record NoteSummaryResponse(UUID id, String title, List<UUID> saveIds, boolean empty, Instant createdAt, Instant updatedAt) {}
 public record NoteResponse(UUID id, String title, List<NoteBlockResponse> blocks, Instant createdAt, Instant updatedAt) {}
 public record NoteBlockResponse(NoteBlockKind kind, String text, SaveResponse save) {} // text: TEXT only; save: QUOTE only
-public record ImportJobResponse(UUID id, String fileName, ImportStatus status, int highlightsCount) {}
+public record ImportResponse(UUID id, String fileName, long sizeBytes, ImportStatus status, String errorCode, // errorCode: FAILED only
+    int marksCount, int keptCount, UUID sourceId, String title, String author, // the file's source, once read
+    Instant readAt, Instant reviewedAt, Instant createdAt, List<ImportMarkResponse> marks) {} // marks: GET /imports/{id} only
+public record ImportMarkResponse(UUID id, MarkType type, MarkColor color, FileColor fileColor, String text,
+    Integer pageNumber, String comment, String imageUrl, boolean selected, UUID saveId) {} // imageUrl: drawn and handwritten, signed for an hour
+public record ImportsResponse(List<ImportResponse> items, UploadSpaceResponse space) {} // UploadSpaceResponse(long usedBytes, long limitBytes)
+public record ReviewRequest(String title, String author, String tag, MarkColor color, List<UUID> selectedMarkIds) {}
+public record ReviewResponse(int added, int removed, UUID sourceId) {}
 public record PageResponse<T>(List<T> items, String nextCursor) {}
 
 enum Plan { NONE, HIVE }
@@ -214,15 +222,18 @@ enum HighlightColor { YELLOW, GREEN, BLUE, PINK, PURPLE }
 enum SourceKind { WEBSITE, FILE }
 enum SaveOrder { NEWEST, PAGE }
 enum NoteBlockKind { TEXT, QUOTE }
-enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
+enum ImportStatus { QUEUED, READING, READY, SAVED, EMPTY, FAILED, DISCARDED }
+enum MarkType { HIGHLIGHT, UNDERLINE, DRAWN, HANDWRITTEN, STRIKE, NOTE }
+enum MarkColor { YELLOW, GREEN, BLUE, PINK, PURPLE } // as HighlightColor
+enum FileColor { ORANGE, RED } // a file's own color that had to be mapped
 ```
 
 | Endpoint | Feature | Behavior |
 |---|---|---|
 | `POST /auth/register` `{ username, password, fullName, birthDate }` | `account` | 201 + `MeResponse` + both cookies; 409 `USERNAME_TAKEN` |
 | `POST /auth/login` `{ username, password }` | `account` | 200 + `MeResponse` + both cookies; 401 `INVALID_CREDENTIALS` |
-| `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears both |
-| `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears both cookies |
+| `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears them |
+| `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears the cookies |
 | `POST /me/extension-code` | `account` | 200 `{ code }`: the signed-in website's code for the extension (F13), 60 seconds, single use, its SHA-256 in Redis |
 | `POST /auth/extension/code` `{ username, password }` | `account` | 200 `{ code }` for that account, no cookies: the website's extension sign-in page, so the extension can use another account than the website; 401 `INVALID_CREDENTIALS` |
 | `POST /auth/extension/token` `{ code }` | `account` | 200 `{ accessToken, refreshToken }` as JSON, no cookies: the extension's own session (`client EXTENSION`); 401 `INVALID_CODE` |
@@ -254,8 +265,13 @@ enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 | `GET /notes/{id}` | `note` | `NoteResponse`, each quote with its save as it is now; 404 `NOT_FOUND`, also for someone else's |
 | `PUT /notes/{id}` (as `POST`) | `note` | 200 + `NoteResponse`: the title and every block replace what was there, in one transaction; 404 `NOT_FOUND` |
 | `DELETE /notes/{id}` | `note` | 204; the saves it quotes stay; 404 `NOT_FOUND` |
-| `POST /imports` (multipart `file`) | `fileimport` | Ignores the file content; returns a `DONE` job with 0 highlights |
-| `GET /imports/{id}` | `fileimport` | Returns that job |
+| `GET /imports` | `fileimport` | `ImportsResponse`: the files not dismissed, newest first (200 at most), and the upload space; the website polls it every 2 s while one is `QUEUED` or `READING` |
+| `POST /imports` (multipart `file`) | `fileimport` | 202 + `ImportResponse` (`QUEUED`): a PDF or DOCX by its bytes, of any size that fits in the space left (everyone has 50 MB until billing; the servlet takes up to 50 MB), stored in MinIO and queued through the outbox; 400 `UNSUPPORTED_FILE`, `NO_SPACE_LEFT`; 413 `FILE_TOO_LARGE` over 50 MB |
+| `GET /imports/{id}` | `fileimport` | `ImportResponse`, with its marks once `READY` or `SAVED`; 404 `NOT_FOUND` |
+| `PUT /imports/{id}/review` `{ title, author, tag, color, selectedMarkIds }` | `fileimport` | 200 + `ReviewResponse`: ticked marks without a save become saves (`IMPORT`, or an image clip for a handwritten mark's picture) through `SaveFacade.createImported`; saved ones unticked are deleted; the source takes the title and author; `SAVED`. 409 `INVALID_IMPORT_STATE` |
+| `POST /imports/{id}/retry` | `fileimport` | 202, a `FAILED` file back to `QUEUED`; 409 otherwise |
+| `POST /imports/{id}/dismiss` | `fileimport` | 204, hides a `FAILED`, `EMPTY` or `DISCARDED` file; 409 otherwise |
+| `DELETE /imports/{id}` | `fileimport` | 204, discards a `READY` file: its marks and source go; 409 otherwise |
 
 Saves, tags, sources and notes are real PostgreSQL data (changesets 004 to 009); there is no sample data.
 
@@ -466,7 +482,7 @@ Do these in order, one at a time:
    `notes.body`, the paragraphs joined). `common/search/SearchText` turns what is typed
    into a prefix `to_tsquery` text and a `LIKE` pattern. Results stay newest first (no ranking),
    so the cursor works as without a search.
-4. **File imports:** `common/client/ObjectStorage` talks to MinIO through the AWS SDK's S3 client
+4. **File imports (done, F5 and F11):** `common/client/ObjectStorage` talks to MinIO through the AWS SDK's S3 client
    (path-style, checksums only where required), so any S3-compatible server can replace it by
    config. MinIO's own images are no longer published and its community edition is archived, so
    compose and the tests use the pinned community fork `pgsty/minio`; watch it for security
@@ -475,14 +491,17 @@ Do these in order, one at a time:
    `import.process` → the import consumer in `ari-api` → PDFBox reads PDF highlight annotations
    with page numbers, POI reads DOCX highlights and comments → delete the file. Image OCR happens
    in the browser (frontend repo). EPUB is not supported.
-5. **Async jobs and retries (done for email; `import.process` comes with file imports):** a transactional outbox
+5. **Async jobs and retries (done for email and `import.process`):** a transactional outbox
    in `feature/outbox`. Write the outbox row in the same transaction as the business change
    (`OutboxFacade.add` refuses to run without one); a scheduled publisher sends pending rows to
    RabbitMQ every second (`common/client/MessagePublisher`, publisher confirms) and marks them sent,
    and deletes sent rows after 7 days. `config/RabbitConfig` declares each work queue, bound to the
    `ari` direct exchange by its own name, with `.retry.2s`, `.retry.10s` and `.retry.60s` delay
    queues (message TTL, dead-lettered back to the work queue) and a `.dlq`. Consumers retry 2 s → 10 s → 60 s, then go to
-   a dead-letter queue; they are idempotent by event id; failed jobs are visible to the user.
+   a dead-letter queue; they are idempotent by event id (the import consumer through `processed_events`, written with
+   `OutboxFacade.markProcessed` in its own transaction); failed jobs are visible to the user. A
+   message that can never succeed throws `UnprocessableMessageException` and skips the retries;
+   `FailedMessageHandler.handle` says when it dead-lettered one, so the consumer can mark it failed.
    Queues: `import.process`, `email.transactional`, `email.bulk`. The mail sender is `feature/mail`
    inside `ari-api` for now: it consumes the `email.*` queues, owns the Thymeleaf templates and sends
    over SMTP (Mailpit locally). It reads no table and talks to the rest only through RabbitMQ, so it

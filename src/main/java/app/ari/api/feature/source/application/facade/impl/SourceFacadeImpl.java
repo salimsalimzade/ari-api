@@ -17,6 +17,7 @@ import app.ari.api.feature.source.domain.service.SourceService;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -39,6 +40,21 @@ public class SourceFacadeImpl implements SourceFacade {
         .saveWebsite(userId, request.url(), request.name(), request.title(), request.author())
         .map(mapper::toResponse)
         .orElseThrow(InvalidSourceUrlException::new);
+  }
+
+  @Override
+  public SourceResponse createFile(UUID userId, String name, String title, String author) {
+    return mapper.toResponse(sourceService.createFile(userId, name, title, author));
+  }
+
+  @Override
+  public Optional<SourceResponse> updateFile(UUID userId, UUID id, String title, String author) {
+    return sourceService.updateFile(userId, id, title, author).map(mapper::toResponse);
+  }
+
+  @Override
+  public void deleteFileIfUnused(UUID userId, UUID id) {
+    sourceService.deleteFileIfUnused(userId, id);
   }
 
   @Override

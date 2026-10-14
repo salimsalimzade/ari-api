@@ -2,12 +2,14 @@ package app.ari.api.feature.save.application.facade;
 
 import app.ari.api.common.response.PageResponse;
 import app.ari.api.feature.save.application.model.request.CreateSaveRequest;
+import app.ari.api.feature.save.application.model.request.ImportedSaveRequest;
 import app.ari.api.feature.save.application.model.request.ListSavesRequest;
 import app.ari.api.feature.save.application.model.request.SaveFilterRequest;
 import app.ari.api.feature.save.application.model.request.UpdateSaveRequest;
 import app.ari.api.feature.save.application.model.response.FacetsResponse;
 import app.ari.api.feature.save.application.model.response.SaveResponse;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -20,6 +22,13 @@ public interface SaveFacade {
    * InvalidClipImageException} or {@code InvalidSourceUrlException}.
    */
   SaveResponse create(UUID userId, CreateSaveRequest request, byte[] image);
+
+  /**
+   * Saves marks of an imported file, all from its source, and counts them in the user's saves;
+   * returns the new saves' ids in the same order. Throws {@code InvalidClipImageException} for a
+   * picture that isn't a supported image.
+   */
+  List<UUID> createImported(UUID userId, UUID sourceId, List<ImportedSaveRequest> saves);
 
   /**
    * The user's saves, newest first or in page order; throws {@code InvalidCursorException}, also

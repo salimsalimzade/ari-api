@@ -353,7 +353,9 @@ Search (F10, changeset 008) adds:
   | `canceled` | `active` with `cancel_at` set, then `canceled` once that day passes |
 
 - Upload space used is the sum of `imports.size_bytes` for imports in `QUEUED`, `READING`, `READY`
-  or `SAVED`. The trial gives 50 MB with at most 5 MB per file, Hive gives 1 GB. An upload checks it
+  or `SAVED`. Until billing comes, everyone has 50 MB, in files of any size that fit in what is
+  left, whatever the plan (`UploadSpace`); with billing, the trial keeps 50 MB and Hive gives 1 GB.
+  An upload checks it
   with the user's row locked (`SELECT … FOR UPDATE`), so two uploads can't both take the last
   megabytes.
 
@@ -400,7 +402,7 @@ flowchart LR
   subgraph files["MinIO, private bucket ari"]
     avatars["avatars/{userId}/{photoId}.jpg"]
     imports["imports/{userId}/{importId}"]
-    marks["marks/{userId}/{markId}.webp"]
+    marks["marks/{userId}/{markId}.png"]
     saves["saves/{userId}/{saveId}.{jpg,png,webp}"]
   end
   username -- "BF.ADD, nightly rebuild" --> bloom
@@ -423,7 +425,7 @@ flowchart LR
 | MinIO key | Row | Written | Deleted |
 |---|---|---|---|
 | `imports/{userId}/{importId}` | `imports.storage_key` | The upload | Once read, or on discard or dismiss |
-| `marks/{userId}/{markId}.webp` | `import_marks.image_key` | The import consumer, for `DRAWN` and `HANDWRITTEN` marks | With its marks, when the import is discarded |
+| `marks/{userId}/{markId}.png` | `import_marks.image_key` | The import consumer, for `DRAWN` and `HANDWRITTEN` marks | With its marks, when the import is discarded |
 | `saves/{userId}/{saveId}.{jpg,png,webp}` | `saves.image_key` | An image clip (one multipart `POST /saves`, 2 MB at most), or a copy of a saved handwritten mark | After its save's deletion commits |
 | `avatars/{userId}/{photoId}.{jpg,png,webp}` | `users.avatar_key` | `PUT /me/photo`; the website sends a 512×512 JPEG cropped in the browser | After the row points at a new photo, or the photo is removed |
 

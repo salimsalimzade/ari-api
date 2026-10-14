@@ -21,7 +21,8 @@ import org.springframework.context.annotation.Configuration;
 @Configuration
 public class RabbitConfig {
 
-  private static final List<String> WORK_QUEUES = List.of(Queues.EMAIL_TRANSACTIONAL);
+  private static final List<String> WORK_QUEUES =
+      List.of(Queues.EMAIL_TRANSACTIONAL, Queues.IMPORT_PROCESS);
 
   @Bean
   public DirectExchange ariExchange() {

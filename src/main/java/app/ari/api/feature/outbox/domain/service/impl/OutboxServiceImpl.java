@@ -17,6 +17,7 @@ public class OutboxServiceImpl implements OutboxService {
 
   private static final int BATCH_SIZE = 100;
   private static final Duration KEEP_SENT = Duration.ofDays(7);
+  private static final Duration KEEP_PROCESSED = Duration.ofDays(30);
 
   private final OutboxRepository events;
   private final MessagePublisher publisher;
@@ -73,5 +74,20 @@ public class OutboxServiceImpl implements OutboxService {
   @Override
   public int deleteOldSent() {
     return events.deleteSentBefore(clock.instant().minus(KEEP_SENT));
+  }
+
+  @Override
+  public boolean wasProcessed(String consumer, String eventId) {
+    return events.isProcessed(consumer, eventId);
+  }
+
+  @Override
+  public boolean markProcessed(String consumer, String eventId) {
+    return events.insertProcessed(consumer, eventId, clock.instant());
+  }
+
+  @Override
+  public int deleteOldProcessed() {
+    return events.deleteProcessedBefore(clock.instant().minus(KEEP_PROCESSED));
   }
 }

@@ -57,7 +57,8 @@ public class SaveServiceImpl implements SaveService {
   }
 
   @Override
-  public TaggedSave create(UUID userId, UUID sourceId, NewSave newSave, ClipImage image) {
+  public TaggedSave create(
+      UUID userId, UUID sourceId, NewSave newSave, ClipImage image, Integer pageNumber) {
     UUID id = UUID.randomUUID();
     Instant now = now();
     String imageKey =
@@ -75,7 +76,7 @@ public class SaveServiceImpl implements SaveService {
             imageKey,
             newSave.comment(),
             newSave.section(),
-            null,
+            pageNumber,
             now,
             now);
     if (image != null) {

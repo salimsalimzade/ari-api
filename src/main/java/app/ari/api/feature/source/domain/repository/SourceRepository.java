@@ -25,6 +25,15 @@ public interface SourceRepository {
    */
   Source upsertWebsite(Source source);
 
+  /** Adds a source that has no address: an imported file. */
+  void insert(Source source);
+
+  /** Saves the name, title, author and update time. */
+  void updateDetails(Source source);
+
+  /** Deletes the user's FILE source unless saves point at it. */
+  void deleteFileIfUnused(UUID userId, UUID id);
+
   /**
    * The user's own sources among {@code ids}; ids that are unknown or someone else's are left out.
    */

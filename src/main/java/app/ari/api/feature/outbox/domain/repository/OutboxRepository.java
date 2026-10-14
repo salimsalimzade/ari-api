@@ -19,4 +19,12 @@ public interface OutboxRepository {
   void markSent(List<UUID> ids, Instant at);
 
   int deleteSentBefore(Instant before);
+
+  /** Whether the consumer has a record of handling the event. */
+  boolean isProcessed(String consumer, String eventId);
+
+  /** Records it; false when the record was there already. */
+  boolean insertProcessed(String consumer, String eventId, Instant at);
+
+  int deleteProcessedBefore(Instant before);
 }

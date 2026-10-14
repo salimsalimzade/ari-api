@@ -208,10 +208,11 @@ sequenceDiagram
   participant Q as RabbitMQ
   participant C as Import consumer
   B->>A: POST /api/v1/imports (multipart file)
-  A->>A: Check the type (PDF or DOCX) and size, else 400 VALIDATION_FAILED
+  A->>A: Check the size and the type by its bytes (PDF or DOCX), else 413 FILE_TOO_LARGE or 400 UNSUPPORTED_FILE
+  A->>D: Lock the user row, check the upload space, else 400 NO_SPACE_LEFT
   A->>S: PUT imports/{userId}/{importId}
-  A->>D: One transaction: lock the user row, check the upload space, INSERT imports (QUEUED), INSERT outbox_events (import.process)
-  Note over A,S: No space or the transaction fails: DELETE the file, 400 VALIDATION_FAILED
+  A->>D: Same transaction: INSERT imports (QUEUED), INSERT outbox_events (import.process)
+  Note over A,S: The transaction fails: DELETE the file
   A-->>B: 202 ImportResponse (QUEUED)
   loop Every second
     P->>D: SELECT unsent rows FOR UPDATE SKIP LOCKED
@@ -225,7 +226,7 @@ sequenceDiagram
   C->>S: GET the file
   C->>C: PDFBox reads PDF annotations, POI reads DOCX highlights and comments, with pages and colors
   alt Marks found
-    C->>S: PUT marks/{userId}/{markId}.webp, a picture of each DRAWN or HANDWRITTEN mark
+    C->>S: PUT marks/{userId}/{markId}.png, a picture of each DRAWN or HANDWRITTEN mark
     C->>D: One transaction: INSERT sources (FILE, title and author from the file), INSERT import_marks, status READY, INSERT processed_events
     C->>S: DELETE the file
     C->>Q: ack
@@ -237,17 +238,20 @@ sequenceDiagram
     C->>Q: Reject, retry after 2 s, then 10 s, then 60 s
     Note over C,Q: Fourth failure: status FAILED with error_code, the message goes<br/>to import.process.dlq, the file stays in MinIO for Retry
   end
-  loop Every 2 seconds while QUEUED or READING
-    B->>A: GET /api/v1/imports/{id}
-    A-->>B: 200 ImportResponse (status, and the marks once READY)
+  loop Every 2 seconds while a file is QUEUED or READING
+    B->>A: GET /api/v1/imports
+    A-->>B: 200 ImportsResponse (each file's status and counts, the upload space)
   end
+  B->>A: GET /api/v1/imports/{id}
+  A-->>B: 200 ImportResponse with its marks (READY or SAVED)
   B->>A: PUT /api/v1/imports/{id}/review (title, author, tag, color, ticked mark ids)
   A->>D: One transaction: update the source, INSERT saves for newly ticked marks, DELETE saves of unticked ones, set import_marks.save_id, saves_count, status SAVED
-  A-->>B: 200 (added, removed)
+  A-->>B: 200 ReviewResponse (added, removed, sourceId)
 ```
 
-- The file is in MinIO before the transaction, so the consumer never gets a job without its file. If
-  the transaction fails, or the upload space is full, the file is deleted again.
+- The file is in MinIO before the transaction commits, so the consumer never gets a job without
+  its file. If the transaction fails, the file is deleted again. The space is checked before the
+  file is stored, with the user's row locked, so two uploads at once can't both take the last of it.
 - The outbox row is written in the same transaction as the import row, so a job is never lost. The
   publisher can send a message twice (a crash after publishing, before `sent_at`); the
   `processed_events` check makes that harmless.
@@ -256,10 +260,17 @@ sequenceDiagram
   `ari-api`, the only service that reads the database.
 - Retry (`POST /imports/{id}/retry`) sets `QUEUED`, adds one to `attempts` and writes a new outbox
   row. Discard deletes the file, the marks, their pictures and the file's source. Dismissing a
-  `FAILED` or `EMPTY` import sets `dismissed_at` and deletes a file still in MinIO.
-- Saving a handwritten mark copies its picture to `saves/{userId}/{saveId}.webp`, so every MinIO
-  object belongs to exactly one row.
-- F5 (mock, phase 1): `POST /imports` ignores the file. No MinIO, outbox or queue.
+  `FAILED`, `EMPTY` or `DISCARDED` import (`POST /imports/{id}/dismiss`) sets `dismissed_at` and
+  deletes a file still in MinIO. Discard is `DELETE /imports/{id}`, for a `READY` import only.
+- A file that can never be read (damaged, or a PDF with a password) skips the retries: it is
+  `FAILED` at once with `UNREADABLE` or `ENCRYPTED`; one that fails every retry gets `READ_FAILED`.
+- Saving a handwritten mark copies its picture to `saves/{userId}/{saveId}.png`, so every MinIO
+  object belongs to exactly one row. Pictures are PNG: Java's ImageIO writes no WebP.
+- Readers: PDFBox takes highlights, underlines (and squiggles), strike-outs, sticky and typed notes,
+  and drawings (ink, boxes, circles, polygons) with the page's text under them; a drawing over no
+  text is `HANDWRITTEN`. POI takes Word's highlights (and colored shading), strike-throughs and
+  comments; a comment on a highlight becomes its comment, on other text a `NOTE`. Word files give
+  page numbers only where Word noted its page breaks.
 - Photos are not read here: OCR runs in the browser (F12).
 
 ## 6. Save from the extension (F13)

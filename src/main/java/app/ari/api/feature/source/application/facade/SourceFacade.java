@@ -9,6 +9,7 @@ import app.ari.api.feature.source.application.model.response.SourceSummaryRespon
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -22,6 +23,21 @@ public interface SourceFacade {
    * InvalidSourceUrlException} unless the address is an http or https one.
    */
   SourceResponse saveWebsite(UUID userId, SourceRequest request);
+
+  /**
+   * A new source for an imported file: {@code name} is the file's name, {@code title} and {@code
+   * author} what the file says (null for none; the title then falls back to the name).
+   */
+  SourceResponse createFile(UUID userId, String name, String title, String author);
+
+  /**
+   * Changes an imported file's title and author (a blank author removes it); empty when the user
+   * has no such file source.
+   */
+  Optional<SourceResponse> updateFile(UUID userId, UUID id, String title, String author);
+
+  /** Deletes an imported file's source unless something is saved from it. */
+  void deleteFileIfUnused(UUID userId, UUID id);
 
   /** The user's own sources among {@code ids}, by id; unknown ids are left out. */
   Map<UUID, SourceResponse> findAll(UUID userId, Collection<UUID> ids);

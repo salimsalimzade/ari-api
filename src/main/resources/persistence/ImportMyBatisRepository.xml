@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="app.ari.api.feature.fileimport.infrastructure.ImportMyBatisRepository">
+
+  <!-- The counts come with every row: how many marks reading found, and how many are saved. -->
+  <sql id="columns">
+    i.id, i.user_id, i.source_id, i.file_name, i.content_type, i.size_bytes, i.storage_key,
+    i.status, i.attempts, i.error_code, i.read_at, i.reviewed_at, i.dismissed_at, i.created_at,
+    i.updated_at,
+    (SELECT count(*) FROM import_marks m WHERE m.import_id = i.id) AS marks_count,
+    (SELECT count(*) FROM import_marks m WHERE m.import_id = i.id AND m.save_id IS NOT NULL)
+      AS kept_count
+  </sql>
+
+  <!-- The users table is the account feature's: only locked here, never written. -->
+  <select id="lockUser" resultType="java.util.UUID">
+    SELECT id FROM users WHERE id = #{userId} FOR UPDATE
+  </select>
+
+  <select id="usedBytes" resultType="long">
+    SELECT coalesce(sum(size_bytes), 0) FROM imports
+    WHERE user_id = #{userId} AND status IN ('QUEUED', 'READING', 'READY', 'SAVED')
+  </select>
+
+  <insert id="insert">
+    INSERT INTO imports (id, user_id, source_id, file_name, content_type, size_bytes, storage_key,
+                         status, attempts, error_code, created_at, updated_at)
+    VALUES (#{id}, #{userId}, #{sourceId,jdbcType=OTHER}, #{fileName}, #{contentType},
+            #{sizeBytes}, #{storageKey,jdbcType=VARCHAR}, #{status}, #{attempts},
+            #{errorCode,jdbcType=VARCHAR}, #{createdAt}, #{updatedAt})
+  </insert>
+
+  <select id="findById" resultType="app.ari.api.feature.fileimport.domain.model.FileImport">
+    SELECT <include refid="columns"/> FROM imports i WHERE i.id = #{id} AND i.user_id = #{userId}
+  </select>
+
+  <select id="findForReading" resultType="app.ari.api.feature.fileimport.domain.model.FileImport">
+    SELECT <include refid="columns"/> FROM imports i WHERE i.id = #{id}
+  </select>
+
+  <!-- Over the index on (user_id, created_at DESC, id DESC). -->
+  <select id="findAll" resultType="app.ari.api.feature.fileimport.domain.model.FileImport">
+    SELECT <include refid="columns"/> FROM imports i
+    WHERE i.user_id = #{userId} AND i.dismissed_at IS NULL
+    ORDER BY i.created_at DESC, i.id DESC
+    LIMIT #{limit}
+  </select>
+
+  <update id="startReading">
+    UPDATE imports SET status = 'READING', updated_at = #{at}
+    WHERE id = #{id} AND status IN ('QUEUED', 'READING')
+  </update>
+
+  <update id="finishReading">
+    UPDATE imports
+    SET status = #{status}, source_id = #{sourceId,jdbcType=OTHER}, read_at = #{at},
+        storage_key = NULL, error_code = NULL, updated_at = #{at}
+    WHERE id = #{id}
+  </update>
+
+  <!-- Only a file still waiting or being read; a discarded one stays discarded. -->
+  <update id="fail">
+    UPDATE imports SET status = 'FAILED', error_code = #{errorCode}, updated_at = #{at}
+    WHERE id = #{id} AND status IN ('QUEUED', 'READING')
+  </update>
+
+  <update id="requeue">
+    UPDATE imports
+    SET status = 'QUEUED', attempts = attempts + 1, error_code = NULL, updated_at = #{at}
+    WHERE id = #{id} AND user_id = #{userId} AND status = 'FAILED' AND storage_key IS NOT NULL
+  </update>
+
+  <update id="setStatus">
+    UPDATE imports SET status = #{status}, updated_at = #{at} WHERE id = #{id}
+  </update>
+
+  <update id="markSaved">
+    UPDATE imports
+    SET status = 'SAVED', reviewed_at = coalesce(reviewed_at, #{at}), updated_at = #{at}
+    WHERE id = #{id}
+  </update>
+
+  <update id="dismiss">
+    UPDATE imports SET dismissed_at = #{at}, storage_key = NULL, updated_at = #{at}
+    WHERE id = #{id}
+  </update>
+
+  <insert id="insertMarks">
+    INSERT INTO import_marks (id, import_id, save_id, position, type, color, file_color, text,
+                              page_number, comment, image_key, selected, created_at)
+    VALUES
+    <foreach collection="marks" item="m" separator=",">
+      (#{m.id}, #{m.importId}, #{m.saveId,jdbcType=OTHER}, #{m.position}, #{m.type}, #{m.color},
+       #{m.fileColor,jdbcType=VARCHAR}, #{m.text}, #{m.pageNumber,jdbcType=INTEGER},
+       #{m.comment,jdbcType=VARCHAR}, #{m.imageKey,jdbcType=VARCHAR}, #{m.selected},
+       #{m.createdAt})
+    </foreach>
+  </insert>
+
+  <select id="findMarks" resultType="app.ari.api.feature.fileimport.domain.model.ImportMark">
+    SELECT id, import_id, save_id, position, type, color, file_color, text, page_number, comment,
+           image_key, selected, created_at
+    FROM import_marks WHERE import_id = #{importId}
+    ORDER BY position
+  </select>
+
+  <update id="updateMark">
+    UPDATE import_marks
+    SET save_id = #{saveId,jdbcType=OTHER}, color = #{color}, selected = #{selected}
+    WHERE id = #{id}
+  </update>
+
+  <delete id="deleteMarks">
+    DELETE FROM import_marks WHERE import_id = #{importId}
+  </delete>
+</mapper>

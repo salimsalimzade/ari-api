@@ -323,11 +323,12 @@ class SaveControllerTest {
     System.arraycopy(
         new byte[] {(byte) 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n'}, 0, tooBig, 0, 8);
 
-    // MockMvc skips the servlet's own size limit, so this reaches our check.
+    // The servlet takes up to 50 MB, for imports; the clip's own limit is checked in the facade.
     MvcTestResult result = createWithImage(account, imageClipJson(), tooBig, "image/png");
 
-    assertThat(result).hasStatus(HttpStatus.BAD_REQUEST);
-    assertThat(read(result, "$.code")).isEqualTo("INVALID_IMAGE");
+    assertThat(result).hasStatus(HttpStatus.CONTENT_TOO_LARGE);
+    assertThat(read(result, "$.code")).isEqualTo("FILE_TOO_LARGE");
+    assertThat(savesCount(account)).isZero();
   }
 
   // — Reading —

@@ -19,10 +19,12 @@ import java.util.UUID;
 public interface SaveService {
 
   /**
-   * Saves a highlight or clip from the source. An image is stored first and removed again if the
-   * save fails. The caller has checked {@link NewSave#violation(boolean)}.
+   * Saves a highlight, clip or imported mark from the source, at {@code pageNumber} of a file (null
+   * for a web page). An image is stored first and removed again if the save fails. The caller has
+   * checked {@link NewSave#violation(boolean)}, or that an imported mark has a color or an image.
    */
-  TaggedSave create(UUID userId, UUID sourceId, NewSave newSave, ClipImage image);
+  TaggedSave create(
+      UUID userId, UUID sourceId, NewSave newSave, ClipImage image, Integer pageNumber);
 
   /** Empty when there is no such save, or it is someone else's. */
   Optional<Save> findById(UUID userId, UUID id);

@@ -15,6 +15,9 @@ public final class Queues {
   /** Emails a user is waiting for, such as a verify link. */
   public static final String EMAIL_TRANSACTIONAL = "email.transactional";
 
+  /** Uploaded files to read for their marks (docs/sequences.md section 5). */
+  public static final String IMPORT_PROCESS = "import.process";
+
   /** How long a failed message waits before each retry; after the last one it is dead-lettered. */
   public static final List<Duration> RETRY_DELAYS =
       List.of(Duration.ofSeconds(2), Duration.ofSeconds(10), Duration.ofSeconds(60));

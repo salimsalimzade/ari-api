@@ -32,5 +32,8 @@ public class OutboxScheduler {
   @Scheduled(cron = "0 0 3 * * *", zone = "UTC")
   public void deleteOldSent() {
     log.info("Outbox: deleted {} events sent over a week ago", outbox.deleteOldSent());
+    log.info(
+        "Outbox: deleted {} records of events handled over 30 days ago",
+        outbox.deleteOldProcessed());
   }
 }

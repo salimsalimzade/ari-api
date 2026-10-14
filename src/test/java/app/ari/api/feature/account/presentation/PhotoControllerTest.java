@@ -105,8 +105,12 @@ class PhotoControllerTest {
     byte[] tooBig = new byte[2 * 1024 * 1024 + 1];
     System.arraycopy(new byte[] {(byte) 0xFF, (byte) 0xD8, (byte) 0xFF}, 0, tooBig, 0, 3);
 
-    // MockMvc skips the servlet's own size limit, so this reaches the service's check.
-    assertThat(uploadPhoto(account, tooBig, "image/jpeg")).hasStatus(HttpStatus.BAD_REQUEST);
+    // The servlet takes up to 50 MB, for imports; the photo's own limit is checked in the facade.
+    assertThat(uploadPhoto(account, tooBig, "image/jpeg"))
+        .hasStatus(HttpStatus.CONTENT_TOO_LARGE)
+        .bodyJson()
+        .extractingPath("$.code")
+        .isEqualTo("FILE_TOO_LARGE");
     assertThat(avatarKey(account)).isNull();
   }
 

@@ -28,6 +28,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class SourceServiceImpl implements SourceService {
 
+  // The columns' lengths: an imported file's name, title and author come from the file.
+  private static final int NAME_LENGTH = 255;
+  private static final int TITLE_LENGTH = 500;
+  private static final int AUTHOR_LENGTH = 255;
+
   private final SourceRepository sources;
   private final Clock clock;
 
@@ -56,6 +61,64 @@ public class SourceServiceImpl implements SourceService {
                       now,
                       now));
             });
+  }
+
+  @Override
+  public Source createFile(UUID userId, String name, String title, String author) {
+    Instant now = clock.instant();
+    String fileName = clip(name.strip(), NAME_LENGTH);
+    Source source =
+        new Source(
+            UUID.randomUUID(),
+            userId,
+            SourceKind.FILE,
+            fileName,
+            title == null || title.isBlank() ? fileName : clip(title.strip(), TITLE_LENGTH),
+            blankToNull(author),
+            null,
+            now,
+            now);
+    sources.insert(source);
+    return source;
+  }
+
+  @Override
+  public Optional<Source> updateFile(UUID userId, UUID id, String title, String author) {
+    return sources.findAllByIds(userId, List.of(id)).stream()
+        .filter(source -> source.kind() == SourceKind.FILE)
+        .findFirst()
+        .map(
+            source -> {
+              Source changed =
+                  new Source(
+                      source.id(),
+                      userId,
+                      source.kind(),
+                      source.name(),
+                      title == null || title.isBlank()
+                          ? source.name()
+                          : clip(title.strip(), TITLE_LENGTH),
+                      blankToNull(author),
+                      null,
+                      source.createdAt(),
+                      clock.instant());
+              sources.updateDetails(changed);
+              return changed;
+            });
+  }
+
+  @Override
+  public void deleteFileIfUnused(UUID userId, UUID id) {
+    sources.deleteFileIfUnused(userId, id);
+  }
+
+  private static String blankToNull(String text) {
+    return text == null || text.isBlank() ? null : clip(text.strip(), AUTHOR_LENGTH);
+  }
+
+  /** Cuts text to fit its column. */
+  private static String clip(String text, int length) {
+    return text.length() <= length ? text : text.substring(0, length);
   }
 
   @Override

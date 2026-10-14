@@ -23,6 +23,26 @@
     RETURNING <include refid="columns"/>
   </select>
 
+  <insert id="insert">
+    INSERT INTO sources (<include refid="columns"/>)
+    VALUES (#{id}, #{userId}, #{kind}, #{name}, #{title}, #{author,jdbcType=VARCHAR},
+            #{url,jdbcType=VARCHAR}, #{createdAt}, #{updatedAt})
+  </insert>
+
+  <update id="updateDetails">
+    UPDATE sources
+    SET name = #{name}, title = #{title}, author = #{author,jdbcType=VARCHAR},
+        updated_at = #{updatedAt}
+    WHERE id = #{id} AND user_id = #{userId}
+  </update>
+
+  <!-- The saves table is the save feature's; only read here. -->
+  <delete id="deleteFileIfUnused">
+    DELETE FROM sources src
+    WHERE src.id = #{id} AND src.user_id = #{userId} AND src.kind = 'FILE'
+      AND NOT EXISTS (SELECT 1 FROM saves s WHERE s.source_id = src.id)
+  </delete>
+
   <select id="findAllByIds" resultType="app.ari.api.feature.source.domain.model.Source">
     SELECT <include refid="columns"/> FROM sources
     WHERE user_id = #{userId} AND id IN

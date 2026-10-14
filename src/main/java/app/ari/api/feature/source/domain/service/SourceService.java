@@ -22,6 +22,14 @@ public interface SourceService {
   Optional<Source> saveWebsite(
       UUID userId, String address, String name, String title, String author);
 
+  /** A new FILE source; a missing title becomes the name, a blank author none. */
+  Source createFile(UUID userId, String name, String title, String author);
+
+  /** Empty when the user has no FILE source with that id. */
+  Optional<Source> updateFile(UUID userId, UUID id, String title, String author);
+
+  void deleteFileIfUnused(UUID userId, UUID id);
+
   List<Source> findAllByIds(UUID userId, Collection<UUID> ids);
 
   /** The user's sources whose name, title or author the query's words start; none without words. */

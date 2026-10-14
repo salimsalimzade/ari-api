@@ -9,8 +9,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.util.StringUtils;
 
 /**
- * The two sign-in cookies. Both are httpOnly, so page JavaScript never sees a token, and both use
- * {@code Path=/}, so the website's server also receives them while it renders pages.
+ * The two sign-in cookies, and a hint beside them. The sign-in cookies are httpOnly, so page
+ * JavaScript never sees a token; all three use {@code Path=/}, so the website's server also
+ * receives them while it renders pages.
  */
 @Component
 public class AuthCookies {
@@ -19,11 +20,21 @@ public class AuthCookies {
   public static final String REFRESH = "ari_refresh";
 
   /**
+   * Holds no token, so the website's JavaScript may read it: it is there while the access token has
+   * at least a minute left. Before a request that is costly to send twice (an upload), the website
+   * refreshes when it is gone, instead of sending it to get a 401.
+   */
+  public static final String ACCESS_FRESH = "ari_access_fresh";
+
+  /**
    * One minute shorter than the 15-minute JWT, so a cookie still sent never holds an expired one.
    */
   static final Duration ACCESS_MAX_AGE = Duration.ofMinutes(14);
 
   static final Duration REFRESH_MAX_AGE = Duration.ofDays(30);
+
+  /** A minute shorter than the access cookie, so its going leaves time to refresh. */
+  static final Duration ACCESS_FRESH_MAX_AGE = Duration.ofMinutes(13);
 
   private final AuthProperties properties;
 
@@ -34,23 +45,26 @@ public class AuthCookies {
   /** {@code Set-Cookie} headers that sign the browser in. */
   public HttpHeaders signIn(AuthTokens tokens) {
     HttpHeaders headers = new HttpHeaders();
-    headers.add(HttpHeaders.SET_COOKIE, cookie(ACCESS, tokens.accessToken(), ACCESS_MAX_AGE));
-    headers.add(HttpHeaders.SET_COOKIE, cookie(REFRESH, tokens.refreshToken(), REFRESH_MAX_AGE));
+    headers.add(HttpHeaders.SET_COOKIE, cookie(ACCESS, tokens.accessToken(), ACCESS_MAX_AGE, true));
+    headers.add(
+        HttpHeaders.SET_COOKIE, cookie(REFRESH, tokens.refreshToken(), REFRESH_MAX_AGE, true));
+    headers.add(HttpHeaders.SET_COOKIE, cookie(ACCESS_FRESH, "1", ACCESS_FRESH_MAX_AGE, false));
     return headers;
   }
 
-  /** {@code Set-Cookie} headers that delete both cookies. */
+  /** {@code Set-Cookie} headers that delete all three cookies. */
   public HttpHeaders clear() {
     HttpHeaders headers = new HttpHeaders();
-    headers.add(HttpHeaders.SET_COOKIE, cookie(ACCESS, "", Duration.ZERO));
-    headers.add(HttpHeaders.SET_COOKIE, cookie(REFRESH, "", Duration.ZERO));
+    headers.add(HttpHeaders.SET_COOKIE, cookie(ACCESS, "", Duration.ZERO, true));
+    headers.add(HttpHeaders.SET_COOKIE, cookie(REFRESH, "", Duration.ZERO, true));
+    headers.add(HttpHeaders.SET_COOKIE, cookie(ACCESS_FRESH, "", Duration.ZERO, false));
     return headers;
   }
 
-  private String cookie(String name, String value, Duration maxAge) {
+  private String cookie(String name, String value, Duration maxAge, boolean httpOnly) {
     ResponseCookie.ResponseCookieBuilder cookie =
         ResponseCookie.from(name, value)
-            .httpOnly(true)
+            .httpOnly(httpOnly)
             .secure(properties.cookieSecure())
             .sameSite("Lax")
             .path("/")

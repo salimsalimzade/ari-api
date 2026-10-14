@@ -35,6 +35,10 @@ public class ObjectStorage {
         RequestBody.fromBytes(content));
   }
 
+  public byte[] get(String key) {
+    return s3.getObjectAsBytes(request -> request.bucket(bucket).key(key)).asByteArray();
+  }
+
   /** Deleting a missing file is not an error. */
   public void delete(String key) {
     s3.deleteObject(request -> request.bucket(bucket).key(key));

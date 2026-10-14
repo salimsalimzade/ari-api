@@ -27,3 +27,9 @@ databaseChangeLog:
   - include:
       file: v1/009-add-note-search.yaml
       relativeToChangelogFile: true
+  - include:
+      file: v1/010-create-imports.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: v1/011-create-processed-events.yaml
+      relativeToChangelogFile: true

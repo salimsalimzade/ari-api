@@ -1,6 +1,7 @@
 package app.ari.api.feature.account.presentation;
 
 import static app.ari.api.feature.account.presentation.cookie.AuthCookies.ACCESS;
+import static app.ari.api.feature.account.presentation.cookie.AuthCookies.ACCESS_FRESH;
 import static app.ari.api.feature.account.presentation.cookie.AuthCookies.REFRESH;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -46,7 +47,15 @@ class AccountControllerTest {
         .hasPath(REFRESH, "/")
         .hasMaxAge(ACCESS, Duration.ofMinutes(14))
         .hasMaxAge(REFRESH, Duration.ofDays(30));
+    // The hint the website's JavaScript reads: no token in it, gone a minute before ari_access.
+    assertThat(result)
+        .cookies()
+        .isHttpOnly(ACCESS_FRESH, false)
+        .hasValue(ACCESS_FRESH, "1")
+        .hasPath(ACCESS_FRESH, "/")
+        .hasMaxAge(ACCESS_FRESH, Duration.ofMinutes(13));
     assertThat(result.getResponse().getHeaders(HttpHeaders.SET_COOKIE))
+        .hasSize(3)
         .allSatisfy(cookie -> assertThat(cookie).contains("SameSite=Lax"));
   }
 
@@ -252,7 +261,11 @@ class AccountControllerTest {
         mvc.post().uri("/api/v1/auth/logout").cookie(new Cookie(REFRESH, refreshToken)).exchange();
 
     assertThat(result).hasStatus(HttpStatus.NO_CONTENT);
-    assertThat(result).cookies().hasMaxAge(ACCESS, Duration.ZERO).hasMaxAge(REFRESH, Duration.ZERO);
+    assertThat(result)
+        .cookies()
+        .hasMaxAge(ACCESS, Duration.ZERO)
+        .hasMaxAge(REFRESH, Duration.ZERO)
+        .hasMaxAge(ACCESS_FRESH, Duration.ZERO);
     assertThat(refresh(refreshToken)).hasStatus(HttpStatus.UNAUTHORIZED);
   }
 

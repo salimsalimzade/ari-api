@@ -39,4 +39,21 @@ public class OutboxFacadeImpl implements OutboxFacade {
   public int deleteOldSent() {
     return outboxService.deleteOldSent();
   }
+
+  @Override
+  public boolean wasProcessed(String consumer, String eventId) {
+    return outboxService.wasProcessed(consumer, eventId);
+  }
+
+  @Override
+  @Transactional(propagation = Propagation.MANDATORY)
+  public boolean markProcessed(String consumer, String eventId) {
+    return outboxService.markProcessed(consumer, eventId);
+  }
+
+  @Override
+  @Transactional
+  public int deleteOldProcessed() {
+    return outboxService.deleteOldProcessed();
+  }
 }

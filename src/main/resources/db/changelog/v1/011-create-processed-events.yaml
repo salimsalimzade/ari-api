@@ -1,0 +1,39 @@
+databaseChangeLog:
+  - changeSet:
+      id: 011-create-processed-events
+      author: ari
+      changes:
+        # The messages a consumer has handled, so a second delivery of one changes nothing.
+        - createTable:
+            tableName: processed_events
+            columns:
+              - column:
+                  name: consumer
+                  type: varchar(50)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: event_id
+                  type: varchar(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: processed_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - addPrimaryKey:
+            tableName: processed_events
+            constraintName: processed_events_pkey
+            columnNames: consumer, event_id
+        # The nightly cleanup deletes the old ones.
+        - createIndex:
+            tableName: processed_events
+            indexName: processed_events_processed_at_idx
+            columns:
+              - column:
+                  name: processed_at
+      rollback:
+        - dropTable:
+            tableName: processed_events

@@ -155,6 +155,7 @@ Every value comes from an environment variable (locally from `.env`, see `.env.e
 |---|---|
 | Access cookie | `ari_access`: JWT, HS256, 15 minutes, claims `iss` (`ari-api`), `sub` (user id), `plan`. Cookie `Max-Age` 14 minutes, so a cookie the browser still sends never holds an expired JWT |
 | Refresh cookie | `ari_refresh`: 32 random bytes, 30 days from the last refresh, replaced on every refresh |
+| Freshness cookie | `ari_access_fresh=1`: no token, `Max-Age` 13 minutes, so it goes a minute before `ari_access`. Not `HttpOnly`: the website reads it and refreshes before an upload instead of sending the file to get a 401. Set and cleared with the other two |
 | Cookie flags | Both: `Path=/`, `HttpOnly`, `SameSite=Lax`, `Secure` outside local http, `Domain` = shared parent domain in production. `Path=/` lets the `ari` server send `ari_refresh` and refresh while rendering ([sequences §2](sequences.md#2-token-refresh-f1)) |
 | Reuse detection | A replaced refresh token used again within 10 seconds still gets a new pair, while its session has an active token (a server render and a browser call refreshing at once). Otherwise using it revokes its whole session. Logout stays final |
 | Refresh fails | 401 `UNAUTHORIZED`, and both cookies are cleared; only the API can delete httpOnly cookies |
@@ -178,7 +179,7 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 | `INVALID_CODE` | 401 | An email's verify link, or the extension's sign-in code, is unknown, expired or used; or a newer address is waiting for its link; or a password's reset link is unknown (an expired or used one is 410) |
 | `NOT_FOUND` | 404 | The item does not exist or belongs to another user |
 | `INVALID_SAVE` | 400 | A save breaks the rules of its kind: a highlight without a color, a clip with one or without a clip type, a table clip without Markdown, an image clip without its image, an `IMPORT` posted directly; or a color set on a clip |
-| `INVALID_IMAGE` | 400 | A clip's image isn't a JPEG, PNG or WebP by its bytes, or is over 2 MB |
+| `INVALID_IMAGE` | 400 | A clip's image isn't a JPEG, PNG or WebP by its bytes |
 | `INVALID_URL` | 400 | A source's address isn't an http or https address of at most 2048 characters |
 | `INVALID_CURSOR` | 400 | A list cursor the API did not make, or one made for the list's other order |
 | `ACCOUNT_NOT_FOUND` | 404 | No account has the username or verified email a reset link was asked for |
@@ -188,8 +189,11 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 | `CODE_USED` | 410 | A reset link that changed a password already |
 | `INVALID_NOTE` | 400 | A note's block holds what its kind doesn't: a `TEXT` block without text or with a save, a `QUOTE` block without a save or with text |
 | `USERNAME_TAKEN` | 409 | Register, or change the profile to, a username that is already used, in any case |
-| `INVALID_PHOTO` | 400 | A profile photo that isn't a JPEG, PNG or WebP image by its bytes, or is over 2 MB |
-| `FILE_TOO_LARGE` | 413 | An upload over the server's limit (2 MB for a profile photo or a clip's image) |
+| `INVALID_PHOTO` | 400 | A profile photo that isn't a JPEG, PNG or WebP image by its bytes |
+| `FILE_TOO_LARGE` | 413 | An upload over its limit: 2 MB for a profile photo or a clip's image, 50 MB (the whole upload space) for an imported file (the servlet's multipart limit; the 2 MB ones are checked in code) |
+| `UNSUPPORTED_FILE` | 400 | An imported file that isn't a PDF or a Word DOCX by its bytes |
+| `NO_SPACE_LEFT` | 400 | An imported file that doesn't fit in what is left of the upload space (50 MB for everyone, in files of any size) |
+| `INVALID_IMPORT_STATE` | 409 | An import action its status doesn't allow: a review before the file is read, Retry of a file that didn't fail, Discard after the review, Dismiss of one still in use |
 | `EMAIL_TAKEN` | 409 | A verify link is opened for an address another account verified first |
 | `RATE_LIMITED` | 429 | Too many requests in a minute (Redis counters), e.g. the username check, or over the limits of email links and reset requests |
 

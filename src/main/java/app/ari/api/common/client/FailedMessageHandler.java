@@ -33,7 +33,8 @@ public class FailedMessageHandler {
     this.rabbit = rabbit;
   }
 
-  public void handle(Message message, String queue, RuntimeException failure) {
+  /** Returns true when the message went to the dead-letter queue: it won't be tried again. */
+  public boolean handle(Message message, String queue, RuntimeException failure) {
     MessageProperties properties = message.getMessageProperties();
     int retries = properties.getHeader(ATTEMPT_HEADER) instanceof Number n ? n.intValue() : 0;
     boolean retryable = !(failure instanceof UnprocessableMessageException);
@@ -67,5 +68,6 @@ public class FailedMessageHandler {
           operations.waitForConfirmsOrDie(CONFIRM_TIMEOUT.toMillis());
           return target;
         });
+    return target.equals(Queues.deadLetter(queue));
   }
 }

@@ -14,4 +14,12 @@ public interface OutboxService {
 
   /** Deletes events sent more than a week ago; returns how many. */
   int deleteOldSent();
+
+  boolean wasProcessed(String consumer, String eventId);
+
+  /** False when the consumer had the event recorded already. */
+  boolean markProcessed(String consumer, String eventId);
+
+  /** Deletes the records of events handled more than 30 days ago; returns how many. */
+  int deleteOldProcessed();
 }

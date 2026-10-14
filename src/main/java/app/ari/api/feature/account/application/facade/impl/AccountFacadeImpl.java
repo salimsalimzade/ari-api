@@ -11,6 +11,7 @@ import app.ari.api.feature.account.application.exception.conflict.UsernameTakenE
 import app.ari.api.feature.account.application.exception.gone.ResetCodeExpiredException;
 import app.ari.api.feature.account.application.exception.gone.ResetCodeUsedException;
 import app.ari.api.feature.account.application.exception.notfound.AccountNotFoundException;
+import app.ari.api.feature.account.application.exception.payloadtoolarge.PhotoTooLargeException;
 import app.ari.api.feature.account.application.exception.toomanyrequests.EmailRateLimitedException;
 import app.ari.api.feature.account.application.exception.toomanyrequests.UsernameCheckRateLimitedException;
 import app.ari.api.feature.account.application.exception.unauthorized.ExtensionSessionExpiredException;
@@ -307,6 +308,10 @@ public class AccountFacadeImpl implements AccountFacade {
 
   @Override
   public MeResponse changePhoto(UUID userId, byte[] photo) {
+    // The servlet takes uploads up to 50 MB, for imported files.
+    if (photo.length > PhotoService.MAX_BYTES) {
+      throw new PhotoTooLargeException();
+    }
     return toMe(
         photoService
             .changePhoto(currentUser(userId), photo)
