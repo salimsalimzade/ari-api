@@ -10,6 +10,7 @@ import app.ari.api.feature.save.domain.model.SaveCursor;
 import app.ari.api.feature.save.domain.model.SaveFacets;
 import app.ari.api.feature.save.domain.model.SaveFilter;
 import app.ari.api.feature.save.domain.model.SaveKind;
+import app.ari.api.feature.save.domain.model.SaveOrder;
 import app.ari.api.feature.save.domain.model.SavePage;
 import app.ari.api.feature.save.domain.model.SaveTag;
 import app.ari.api.feature.save.domain.model.Tag;
@@ -21,6 +22,7 @@ import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
 import java.util.List;
@@ -106,6 +108,18 @@ public class SaveServiceImpl implements SaveService {
   }
 
   @Override
+  public List<TaggedSave> findAll(UUID userId, Collection<UUID> ids) {
+    if (ids.isEmpty()) {
+      return List.of();
+    }
+    List<Save> found = saves.findAllByIds(userId, ids);
+    Map<UUID, List<String>> names = tagNames(found.stream().map(Save::id).toList());
+    return found.stream()
+        .map(save -> new TaggedSave(save, names.getOrDefault(save.id(), List.of())))
+        .toList();
+  }
+
+  @Override
   public TaggedSave update(Save save, SaveChange change) {
     Instant now = now();
     Save changed =
@@ -134,15 +148,10 @@ public class SaveServiceImpl implements SaveService {
   }
 
   @Override
-  public SavePage page(UUID userId, SaveFilter filter, SaveCursor after, int limit) {
+  public SavePage page(
+      UUID userId, SaveFilter filter, SaveOrder order, SaveCursor after, int limit) {
     // One more than asked for tells whether there is a next page.
-    List<Save> rows =
-        saves.findPage(
-            userId,
-            filter,
-            after == null ? null : after.createdAt(),
-            after == null ? null : after.id(),
-            limit + 1);
+    List<Save> rows = saves.findPage(userId, filter, order, after, limit + 1);
     boolean more = rows.size() > limit;
     List<Save> shown = more ? rows.subList(0, limit) : rows;
     Map<UUID, List<String>> names = tagNames(shown.stream().map(Save::id).toList());
@@ -150,8 +159,7 @@ public class SaveServiceImpl implements SaveService {
         shown.stream()
             .map(save -> new TaggedSave(save, names.getOrDefault(save.id(), List.of())))
             .toList();
-    SaveCursor next =
-        more ? new SaveCursor(shown.getLast().createdAt(), shown.getLast().id()) : null;
+    SaveCursor next = more ? SaveCursor.after(shown.getLast(), order) : null;
     return new SavePage(items, next);
   }
 

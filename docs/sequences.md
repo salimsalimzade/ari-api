@@ -1,6 +1,6 @@
 # Ari sequences
 
-Last updated 2026-10-13. The `ari` repo keeps its own copy with only the client side; this one also
+Last updated 2026-10-14. The `ari` repo keeps its own copy with only the client side; this one also
 shows the server steps. The sign-in rules and error codes are in [architecture.md](architecture.md);
 the tables, Redis keys and MinIO objects are in [database.md](database.md).
 
@@ -13,6 +13,9 @@ the tables, Redis keys and MinIO objects are in [database.md](database.md).
 7. [Paddle checkout and webhook (F15)](#7-paddle-checkout-and-webhook-f15)
 8. [Add and verify an email](#8-add-and-verify-an-email)
 9. [Profile and photo](#9-profile-and-photo)
+10. [Sources page](#10-sources-page)
+11. [Notes](#11-notes)
+12. [Reset a forgotten password](#12-reset-a-forgotten-password)
 
 ## 1. Register or sign in (F1)
 
@@ -128,7 +131,13 @@ sequenceDiagram
   tag, color and source filters, so they change as you filter. `tags`, `colors` (all five, 0
   included) and `sources` count over the whole Library, so choosing one doesn't make the others
   disappear. A tag no save uses any more is not listed.
-- The Library's `q` search arrives with F10 (full-text search) on the same list endpoint.
+- `order=PAGE` lists the saves in page order instead, for a source's page (section 10).
+- `q` searches (F10), on the list and the facets: every word must start a word of the save's text,
+  comment or section (`search_vector @@ to_tsquery('simple', 'swarm:* & nest:*')`, over a GIN
+  index), or of its source's name, title or author (`SourceFacade.findIdsMatching`, then
+  `source_id IN`); or the whole query is part of the text (`LIKE` over a trigram index). Both sides
+  lose their accents (`ari_unaccent`). Results stay newest first, so the cursor works as without a
+  search.
 - The reading view (`/library/{id}`) loads one save with `GET /api/v1/saves/{id}`: the same
   `SaveResponse`, or 404 `NOT_FOUND` when there is no such save or it is someone else's.
 
@@ -462,3 +471,149 @@ sequenceDiagram
   turned down.
 - Changing the username keeps the session: the access token holds the user id, not the username.
 
+## 10. Sources page
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant W as ari server
+  participant A as ari-api
+  participant D as PostgreSQL
+  B->>W: GET /sources (cookies)
+  par The cards
+    W->>A: GET /api/v1/sources (kind=WEBSITE or FILE for a tab)
+    A->>D: The user's sources joined to their saves: counts per kind, first and latest save, latest saved from first, 40 per page
+    A->>D: The page's sources, their colors (most used first) and each one's newest save with a color
+    A-->>W: 200 PageResponse (SourceSummaryResponse, nextCursor)
+  and The tabs
+    W->>A: GET /api/v1/sources/counts
+    A->>D: The user's sources that have saves, per kind
+    A-->>W: 200 total and kinds
+  end
+  W-->>B: Streamed HTML with the data in it
+  B->>A: GET /api/v1/sources?cursor=... (the end of the cards in view)
+  A-->>B: 200 next page
+  B->>W: GET /sources/{id}
+  par The source
+    W->>A: GET /api/v1/sources/{id}
+    A-->>W: 200 SourceSummaryResponse, or 404 NOT_FOUND
+  and Its saves
+    W->>A: GET /api/v1/saves?source={id}&order=PAGE
+    A->>D: Its saves by page number (none counts as 0), then created_at and id
+    A-->>W: 200 PageResponse (saves, nextCursor)
+  end
+  W-->>B: Streamed HTML
+  B->>A: GET /api/v1/saves?source={id} (Newest first), and &cursor=... in either order
+```
+
+- `GET /sources?q=` searches: every word must start a word of the source's name, title or author
+  (`sources.search_vector`). The website's search palette uses it.
+- A source with nothing saved from it any more is left out of the list and the counts, and
+  `GET /sources/{id}` answers 404 `NOT_FOUND` for it, as for an unknown id or someone else's.
+- The source feature sums up the `saves` table in its own SQL, reading it but never writing it. It
+  can't ask the save feature's facade, because that one already calls the source facade to find
+  or create a save's source. Colors cross as text (`YELLOW` … `PURPLE`), since `HighlightColor` is
+  the save feature's domain type.
+- The list is in the order the sources were last saved from: keyset paging on (the latest save's
+  time, id), base64url-encoded like the Library's cursor; 400 `INVALID_CURSOR` for one the API did
+  not make.
+- `order=PAGE` sorts by page number, then by the order they were saved in. A web page's saves have
+  no page number, so they come in the order they were saved, which is usually the order they were
+  read in. That cursor carries the page number too, and one made for either order is 400
+  `INVALID_CURSOR` in the other.
+- Each source lists the notes quoting its saves (`notes`: id, title, how many), the one changed
+  most recently first: a join of `note_blocks`, `notes` and `saves` that the source feature only
+  reads (section 11).
+
+## 11. Notes
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant W as ari server
+  participant A as ari-api
+  participant D as PostgreSQL
+  B->>W: GET /notes/{id} (cookies)
+  par The list, on every signed-in page
+    W->>A: GET /api/v1/notes
+    A->>D: The user's notes, the one changed most recently first, with the saves each quotes
+    A-->>W: 200 NoteSummaryResponse[] (title, saveIds, empty, createdAt, updatedAt)
+  and The open note
+    W->>A: GET /api/v1/notes/{id}
+    A->>D: The note and its blocks in order
+    A->>A: The quoted saves through SaveFacade.findAll, with source and tags
+    A-->>W: 200 NoteResponse (each quote with its save), or 404 NOT_FOUND
+  end
+  W-->>B: Streamed HTML with the data in it
+  B->>A: POST /api/v1/notes (New note, Add to note, Duplicate)
+  A->>A: Keep only quotes of the user's own saves
+  A->>D: One transaction: INSERT notes, INSERT note_blocks
+  A-->>B: 201 NoteResponse
+  B->>B: Typing changes the page's draft at once
+  B->>A: PUT /api/v1/notes/{id} (title and every block), once the typing stops
+  A->>D: One transaction: UPDATE notes (title, updated_at), DELETE and INSERT its note_blocks
+  A-->>B: 200 NoteResponse
+  B->>A: DELETE /api/v1/notes/{id}
+  A->>D: DELETE notes (its blocks go with it)
+  A-->>B: 204
+```
+
+- A whole note goes with every save, and replaces what was there, so the website never has to
+  merge block changes. It waits for the one save of a note to arrive before it sends the next, so
+  an older one never lands last.
+- A quote stores only its save's id. `GET /notes/{id}` answers each quote with the save as it is
+  now (color, comment, source), and deleting a save deletes its quotes through the foreign key.
+  A quote of a save that isn't the user's (deleted, or never theirs) is left out when the note is
+  written, so a note never shows another user's save.
+- 400 `INVALID_NOTE` when a block holds what its kind doesn't; `VALIDATION_FAILED` for a title
+  over 200 characters, more than 1000 blocks or a paragraph over 20000 characters.
+- `updatedAt` equals `createdAt` until the first edit, which is how the website tells "Created"
+  from "Edited". `empty` is a note with no title, no quote and nothing but whitespace written.
+- `GET /notes?q=` searches the title and the note's own writing: every word must start a word of
+  them (from any paragraph), or the whole query is part of them. Each save writes `notes.body`,
+  the paragraphs joined, with the blocks.
+
+## 12. Reset a forgotten password
+
+```mermaid
+sequenceDiagram
+  participant B as Browser on /forgot-password
+  participant A as ari-api
+  participant R as Redis
+  participant D as PostgreSQL
+  participant M as Mail sender
+  participant I as The user's inbox
+  participant P as Browser on /reset-password
+  B->>A: POST /api/v1/auth/password-reset (login: a username or email)
+  A->>R: INCR rate:password-reset:{address}; over 20 an hour is 429 RATE_LIMITED
+  A->>D: The account with that verified email (an "@" in it) or username
+  alt None
+    A-->>B: 404 ACCOUNT_NOT_FOUND
+  else No email, or it waits for its verify link
+    A-->>B: 409 NO_EMAIL or EMAIL_NOT_CONFIRMED
+  else Found
+    A->>R: The account's email limits (1 a minute, 5 a day, with verify links)
+    A->>R: SET code:password-reset:{SHA-256} (user id, expires in 30 minutes), kept 7 days
+    A->>D: INSERT outbox_events (ResetPassword, in the ari_lang language)
+    A-->>B: 204
+    D-)M: The outbox sends it to email.transactional
+    M-)I: "Reset your Ari password", with the link
+  end
+  I->>P: The user opens /reset-password?code=…
+  P->>A: POST /api/v1/auth/password-reset/check (code), while the server renders
+  A->>R: GET the code, EXISTS its used key
+  A-->>P: 200 username, or 401 INVALID_CODE, 410 CODE_EXPIRED or CODE_USED
+  P->>A: POST /api/v1/auth/password-reset/confirm (code, password)
+  A->>R: SET NX code:password-reset-used:{SHA-256}; already there is 410 CODE_USED
+  A->>D: UPDATE users SET password_hash; revoke every refresh token of the user
+  A-->>P: 204
+```
+
+- Only the code's SHA-256 is stored. The code is kept a week though it works for 30 minutes, so an
+  expired or used link says so instead of "doesn't work"; after that it is unknown.
+- Checking never uses the code up; confirming marks it used with `SET NX`, so two confirms at once
+  change the password once.
+- A new password ends every session of the account, the website's and the extension's: the reason
+  to reset may be that someone else has it.
+- Asking says why no link was sent, which tells whether an account exists; usernames are public
+  through `/auth/username-available` already, and the address limit keeps anyone from trying many.

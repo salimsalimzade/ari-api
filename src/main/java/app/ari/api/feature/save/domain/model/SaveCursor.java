@@ -7,12 +7,34 @@ import java.util.Base64;
 import java.util.Optional;
 import java.util.UUID;
 
-/** The place in the Library a page ends at: the last save's time and id, newest first. */
-public record SaveCursor(Instant createdAt, UUID id) {
+/**
+ * The place in a list of saves a page ends at: the last save's time and id, and in the {@link
+ * SaveOrder#PAGE} order also its page number (0 for a save without one).
+ */
+public record SaveCursor(Integer pageNumber, Instant createdAt, UUID id) {
 
-  /** Opaque to clients: base64url of "time|id". */
+  /** A place in the newest-first order. */
+  public SaveCursor(Instant createdAt, UUID id) {
+    this(null, createdAt, id);
+  }
+
+  /** The place right after {@code save} in {@code order}. */
+  public static SaveCursor after(Save save, SaveOrder order) {
+    if (order == SaveOrder.NEWEST) {
+      return new SaveCursor(save.createdAt(), save.id());
+    }
+    int page = save.pageNumber() == null ? 0 : save.pageNumber();
+    return new SaveCursor(page, save.createdAt(), save.id());
+  }
+
+  /** The order this cursor goes on in. */
+  public SaveOrder order() {
+    return pageNumber == null ? SaveOrder.NEWEST : SaveOrder.PAGE;
+  }
+
+  /** Opaque to clients: base64url of "time|id", or "time|id|page" in the page order. */
   public String encode() {
-    String plain = createdAt + "|" + id;
+    String plain = createdAt + "|" + id + (pageNumber == null ? "" : "|" + pageNumber);
     return Base64.getUrlEncoder()
         .withoutPadding()
         .encodeToString(plain.getBytes(StandardCharsets.UTF_8));
@@ -22,13 +44,15 @@ public record SaveCursor(Instant createdAt, UUID id) {
   public static Optional<SaveCursor> decode(String cursor) {
     try {
       String plain = new String(Base64.getUrlDecoder().decode(cursor), StandardCharsets.UTF_8);
-      int bar = plain.indexOf('|');
-      if (bar < 0) {
+      String[] parts = plain.split("\\|", -1);
+      if (parts.length < 2 || parts.length > 3) {
         return Optional.empty();
       }
-      return Optional.of(
-          new SaveCursor(
-              Instant.parse(plain.substring(0, bar)), UUID.fromString(plain.substring(bar + 1))));
+      Integer page = parts.length == 3 ? Integer.valueOf(parts[2]) : null;
+      if (page != null && page < 0) {
+        return Optional.empty();
+      }
+      return Optional.of(new SaveCursor(page, Instant.parse(parts[0]), UUID.fromString(parts[1])));
     } catch (IllegalArgumentException | DateTimeException e) {
       return Optional.empty();
     }

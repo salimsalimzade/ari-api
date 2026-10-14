@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="app.ari.api.feature.note.infrastructure.NoteMyBatisRepository">
+
+  <sql id="columns">
+    id, user_id, title, created_at, updated_at
+  </sql>
+
+  <insert id="insert">
+    INSERT INTO notes (<include refid="columns"/>)
+    VALUES (#{id}, #{userId}, #{title}, #{createdAt}, #{updatedAt})
+  </insert>
+
+  <update id="update">
+    UPDATE notes SET title = #{title}, updated_at = #{updatedAt}
+    WHERE id = #{id} AND user_id = #{userId}
+  </update>
+
+  <update id="setBody">
+    UPDATE notes SET body = #{body} WHERE id = #{id}
+  </update>
+
+  <select id="findById" resultType="app.ari.api.feature.note.domain.model.Note">
+    SELECT <include refid="columns"/> FROM notes WHERE id = #{id} AND user_id = #{userId}
+  </select>
+
+  <!--
+    Over the index on (user_id, updated_at DESC, id DESC); a search over the GIN index on
+    search_vector (title and body), or the trigram index for part of a word.
+  -->
+  <select id="findAll" resultType="app.ari.api.feature.note.domain.model.Note">
+    SELECT <include refid="columns"/> FROM notes
+    WHERE user_id = #{userId}
+    <if test="prefixQuery != null">
+      AND (
+        search_vector @@ to_tsquery('simple', ari_unaccent(#{prefixQuery}))
+        OR ari_unaccent(lower(title || ' ' || body)) LIKE ari_unaccent(#{containsPattern}) ESCAPE '\'
+      )
+    </if>
+    ORDER BY updated_at DESC, id DESC
+  </select>
+
+  <select id="findBlocks" resultType="app.ari.api.feature.note.domain.model.NoteBlock">
+    SELECT kind, text, save_id FROM note_blocks WHERE note_id = #{noteId} ORDER BY position
+  </select>
+
+  <insert id="insertBlocks">
+    INSERT INTO note_blocks (note_id, position, kind, text, save_id) VALUES
+    <foreach collection="blocks" item="block" index="position" separator=",">
+      (#{noteId}, #{position}, #{block.kind}, #{block.text,jdbcType=VARCHAR},
+       #{block.saveId,jdbcType=OTHER})
+    </foreach>
+  </insert>
+
+  <delete id="deleteBlocks">
+    DELETE FROM note_blocks WHERE note_id = #{noteId}
+  </delete>
+
+  <select id="findQuotes" resultType="app.ari.api.feature.note.domain.model.NoteQuote">
+    SELECT b.note_id, b.save_id FROM note_blocks b JOIN notes n ON n.id = b.note_id
+    WHERE n.user_id = #{userId} AND b.kind = 'QUOTE'
+    ORDER BY b.note_id, b.position
+  </select>
+
+  <!-- \S: a paragraph of only spaces or line breaks counts as blank. -->
+  <select id="findWritten" resultType="java.util.UUID">
+    SELECT DISTINCT b.note_id FROM note_blocks b JOIN notes n ON n.id = b.note_id
+    WHERE n.user_id = #{userId} AND b.kind = 'TEXT' AND b.text ~ '\S'
+  </select>
+
+  <delete id="delete">
+    DELETE FROM notes WHERE id = #{id} AND user_id = #{userId}
+  </delete>
+</mapper>

@@ -1,0 +1,100 @@
+databaseChangeLog:
+  - changeSet:
+      id: 007-create-notes
+      author: ari
+      changes:
+        - createTable:
+            tableName: notes
+            columns:
+              - column:
+                  name: id
+                  type: uuid
+                  constraints:
+                    primaryKey: true
+                    primaryKeyName: notes_pkey
+              - column:
+                  name: user_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: notes_user_id_fkey
+                    references: users(id)
+                    deleteCascade: true
+              - column:
+                  name: title
+                  type: varchar(200)
+                  defaultValue: ''
+                  constraints:
+                    nullable: false
+              - column:
+                  name: created_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+              # The last edit; the Notes page lists by it.
+              - column:
+                  name: updated_at
+                  type: timestamptz
+                  defaultValueComputed: now()
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: CREATE INDEX notes_user_updated_idx ON notes (user_id, updated_at DESC, id DESC)
+        # A note is its blocks in order: paragraphs, and quotes of saves between them.
+        - createTable:
+            tableName: note_blocks
+            columns:
+              - column:
+                  name: note_id
+                  type: uuid
+                  constraints:
+                    nullable: false
+                    foreignKeyName: note_blocks_note_id_fkey
+                    references: notes(id)
+                    deleteCascade: true
+              - column:
+                  name: position
+                  type: int
+                  constraints:
+                    nullable: false
+              - column:
+                  name: kind
+                  type: varchar(10)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: text
+                  type: text
+              # A quote stores only its save, so it shows the save as it is now, and goes with it.
+              - column:
+                  name: save_id
+                  type: uuid
+                  constraints:
+                    foreignKeyName: note_blocks_save_id_fkey
+                    references: saves(id)
+                    deleteCascade: true
+        - addPrimaryKey:
+            tableName: note_blocks
+            constraintName: note_blocks_pkey
+            columnNames: note_id, position
+        - sql:
+            sql: >-
+              ALTER TABLE note_blocks
+              ADD CONSTRAINT note_blocks_kind_check CHECK (kind IN ('TEXT', 'QUOTE')),
+              ADD CONSTRAINT note_blocks_content_check CHECK (
+                (kind = 'TEXT' AND text IS NOT NULL AND save_id IS NULL)
+                OR (kind = 'QUOTE' AND save_id IS NOT NULL AND text IS NULL)),
+              ADD CONSTRAINT note_blocks_position_check CHECK (position >= 0)
+        # Deleting a save finds its quotes; the Sources page counts them.
+        - createIndex:
+            tableName: note_blocks
+            indexName: note_blocks_save_id_idx
+            columns:
+              - column:
+                  name: save_id
+      rollback:
+        - dropTable:
+            tableName: note_blocks
+        - dropTable:
+            tableName: notes

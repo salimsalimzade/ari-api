@@ -32,6 +32,15 @@ public interface UserRepository {
   /** True when another account has this verified email. */
   boolean isEmailTaken(String email, UUID exceptUserId);
 
+  /** The account whose verified email this is (lowercase). */
+  Optional<User> findByEmail(String email);
+
+  /** True when an account waits for this email's verify link (lowercase). */
+  boolean isPendingEmail(String email);
+
+  /** Sets the password's hash. */
+  void setPasswordHash(UUID id, String passwordHash);
+
   /** Clears the verified and the pending email. */
   void removeEmail(UUID id, Instant at);
 

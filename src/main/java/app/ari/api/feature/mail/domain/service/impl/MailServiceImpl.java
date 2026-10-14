@@ -14,7 +14,8 @@ public class MailServiceImpl implements MailService {
   /**
    * Each event type and its template in templates/mail/, with its texts in i18n/mail*.properties.
    */
-  private static final Map<String, String> TEMPLATES = Map.of("VerifyEmail", "verify-email");
+  private static final Map<String, String> TEMPLATES =
+      Map.of("VerifyEmail", "verify-email", "ResetPassword", "reset-password");
 
   private final SentEmailRepository sentEmails;
   private final EmailRenderer renderer;

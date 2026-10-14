@@ -7,6 +7,8 @@ import app.ari.api.feature.save.application.model.request.SaveFilterRequest;
 import app.ari.api.feature.save.application.model.request.UpdateSaveRequest;
 import app.ari.api.feature.save.application.model.response.FacetsResponse;
 import app.ari.api.feature.save.application.model.response.SaveResponse;
+import java.util.Collection;
+import java.util.Map;
 import java.util.UUID;
 
 /** The Library's use cases. Other features use only this facade. */
@@ -19,13 +21,22 @@ public interface SaveFacade {
    */
   SaveResponse create(UUID userId, CreateSaveRequest request, byte[] image);
 
-  /** The user's saves, newest first; throws {@code InvalidCursorException}. */
+  /**
+   * The user's saves, newest first or in page order; throws {@code InvalidCursorException}, also
+   * for a cursor made for the other order.
+   */
   PageResponse<SaveResponse> list(UUID userId, ListSavesRequest request);
 
   FacetsResponse facets(UUID userId, SaveFilterRequest filter);
 
   /** One save with its source and tags; throws {@code SaveNotFoundException}. */
   SaveResponse get(UUID userId, UUID id);
+
+  /**
+   * The user's own saves among {@code ids}, with their sources and tags, by id; unknown ids and
+   * someone else's are left out.
+   */
+  Map<UUID, SaveResponse> findAll(UUID userId, Collection<UUID> ids);
 
   /** Throws {@code SaveNotFoundException} or {@code InvalidSaveException}. */
   SaveResponse update(UUID userId, UUID id, UpdateSaveRequest request);

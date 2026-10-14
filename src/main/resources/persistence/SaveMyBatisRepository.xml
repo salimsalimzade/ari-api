@@ -28,6 +28,22 @@
         <foreach collection="filter.tags()" item="tag" open="(" separator="," close=")">#{tag}</foreach>
       )
     </if>
+    <!--
+      A search: word prefixes over the GIN index on search_vector, part of the text over the trigram
+      index, or a source the facade found matching.
+    -->
+    <if test="filter.query() != null">
+      <bind name="prefixQuery" value="filter.prefixQuery()"/>
+      <bind name="containsPattern" value="filter.containsPattern()"/>
+      AND (
+        s.search_vector @@ to_tsquery('simple', ari_unaccent(#{prefixQuery}))
+        OR ari_unaccent(lower(s.text)) LIKE ari_unaccent(#{containsPattern}) ESCAPE '\'
+        <if test="!filter.sourcesMatchingQuery().isEmpty()">
+          OR s.source_id IN
+          <foreach collection="filter.sourcesMatchingQuery()" item="sourceId" open="(" separator="," close=")">#{sourceId}</foreach>
+        </if>
+      )
+    </if>
   </sql>
 
   <insert id="insert">
@@ -43,13 +59,35 @@
     SELECT <include refid="columns"/> FROM saves s WHERE s.id = #{id} AND s.user_id = #{userId}
   </select>
 
-  <!-- Keyset paging over the index on (user_id, created_at DESC, id DESC). -->
+  <select id="findAllByIds" resultType="app.ari.api.feature.save.domain.model.Save">
+    SELECT <include refid="columns"/> FROM saves s
+    WHERE s.user_id = #{userId} AND s.id IN
+    <foreach collection="ids" item="id" open="(" separator="," close=")">#{id}</foreach>
+  </select>
+
+  <!--
+    Keyset paging. Newest first goes over the index on (user_id, created_at DESC, id DESC). The page
+    order is for one source's saves, which the index on (source_id, page_number, created_at) finds;
+    a save without a page number (any web page's) counts as page 0, so a page's saves are oldest
+    first.
+  -->
   <select id="findPage" resultType="app.ari.api.feature.save.domain.model.Save">
     SELECT <include refid="columns"/> FROM saves s
     WHERE s.user_id = #{userId}
-    <if test="beforeAt != null">AND (s.created_at, s.id) &lt; (#{beforeAt}, #{beforeId})</if>
     <include refid="filter"/>
-    ORDER BY s.created_at DESC, s.id DESC
+    <choose>
+      <when test="order.name() == 'PAGE'">
+        <if test="after != null">
+          AND (COALESCE(s.page_number, 0), s.created_at, s.id)
+            &gt; (#{after.pageNumber}, #{after.createdAt}, #{after.id})
+        </if>
+        ORDER BY COALESCE(s.page_number, 0), s.created_at, s.id
+      </when>
+      <otherwise>
+        <if test="after != null">AND (s.created_at, s.id) &lt; (#{after.createdAt}, #{after.id})</if>
+        ORDER BY s.created_at DESC, s.id DESC
+      </otherwise>
+    </choose>
     LIMIT #{limit}
   </select>
 

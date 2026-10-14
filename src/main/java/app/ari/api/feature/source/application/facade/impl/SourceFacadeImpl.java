@@ -1,12 +1,21 @@
 package app.ari.api.feature.source.application.facade.impl;
 
+import app.ari.api.common.response.PageResponse;
+import app.ari.api.feature.source.application.exception.badrequest.InvalidCursorException;
 import app.ari.api.feature.source.application.exception.badrequest.InvalidSourceUrlException;
+import app.ari.api.feature.source.application.exception.notfound.SourceNotFoundException;
 import app.ari.api.feature.source.application.facade.SourceFacade;
 import app.ari.api.feature.source.application.mapper.SourceMapper;
+import app.ari.api.feature.source.application.model.request.ListSourcesRequest;
 import app.ari.api.feature.source.application.model.request.SourceRequest;
+import app.ari.api.feature.source.application.model.response.SourceCountsResponse;
 import app.ari.api.feature.source.application.model.response.SourceResponse;
+import app.ari.api.feature.source.application.model.response.SourceSummaryResponse;
+import app.ari.api.feature.source.domain.model.SourceCursor;
+import app.ari.api.feature.source.domain.model.SourceSummaryPage;
 import app.ari.api.feature.source.domain.service.SourceService;
 import java.util.Collection;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
@@ -37,5 +46,36 @@ public class SourceFacadeImpl implements SourceFacade {
     return sourceService.findAllByIds(userId, ids).stream()
         .map(mapper::toResponse)
         .collect(Collectors.toMap(SourceResponse::id, Function.identity()));
+  }
+
+  @Override
+  public List<UUID> findIdsMatching(UUID userId, String query) {
+    return sourceService.findIdsMatching(userId, query);
+  }
+
+  @Override
+  public PageResponse<SourceSummaryResponse> list(UUID userId, ListSourcesRequest request) {
+    SourceCursor after =
+        request.cursor() == null
+            ? null
+            : SourceCursor.decode(request.cursor()).orElseThrow(InvalidCursorException::new);
+    SourceSummaryPage page =
+        sourceService.page(userId, request.kind(), request.q(), after, request.pageSize());
+    return new PageResponse<>(
+        page.items().stream().map(mapper::toSummaryResponse).toList(),
+        page.next() == null ? null : page.next().encode());
+  }
+
+  @Override
+  public SourceCountsResponse counts(UUID userId) {
+    return mapper.toCountsResponse(sourceService.countByKind(userId));
+  }
+
+  @Override
+  public SourceSummaryResponse get(UUID userId, UUID id) {
+    return sourceService
+        .summary(userId, id)
+        .map(mapper::toSummaryResponse)
+        .orElseThrow(SourceNotFoundException::new);
   }
 }

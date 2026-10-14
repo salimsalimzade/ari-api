@@ -1,0 +1,52 @@
+databaseChangeLog:
+  - changeSet:
+      id: 008-add-search
+      author: ari
+      changes:
+        # Both are trusted extensions: the database's owner may add them.
+        - sql:
+            sql: CREATE EXTENSION IF NOT EXISTS unaccent
+        - sql:
+            sql: CREATE EXTENSION IF NOT EXISTS pg_trgm
+        # unaccent() is only STABLE (its dictionary could change), so generated columns and
+        # indexes use this IMMUTABLE wrapper, which names the dictionary.
+        - sql:
+            splitStatements: false
+            sql: >-
+              CREATE FUNCTION ari_unaccent(text) RETURNS text
+              LANGUAGE sql IMMUTABLE PARALLEL SAFE STRICT
+              AS $$ SELECT public.unaccent('public.unaccent', $1) $$
+        # The words of a save, without accents and in any language: the simple config keeps every
+        # word as it is (no stemming, no stop words).
+        - sql:
+            sql: >-
+              ALTER TABLE saves ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (
+                to_tsvector('simple', ari_unaccent(
+                  coalesce(text, '') || ' ' || coalesce(comment, '') || ' '
+                  || coalesce(section, '')))
+              ) STORED
+        - sql:
+            sql: CREATE INDEX saves_search_idx ON saves USING gin (search_vector)
+        # Part of a word ("bees" in "honeybees"), which word prefixes don't find.
+        - sql:
+            sql: >-
+              CREATE INDEX saves_text_trgm_idx ON saves
+              USING gin (ari_unaccent(lower(text)) gin_trgm_ops)
+        - sql:
+            sql: >-
+              ALTER TABLE sources ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (
+                to_tsvector('simple', ari_unaccent(
+                  coalesce(name, '') || ' ' || coalesce(title, '') || ' '
+                  || coalesce(author, '')))
+              ) STORED
+        - sql:
+            sql: CREATE INDEX sources_search_idx ON sources USING gin (search_vector)
+      rollback:
+        - sql:
+            sql: >-
+              DROP INDEX sources_search_idx;
+              ALTER TABLE sources DROP COLUMN search_vector;
+              DROP INDEX saves_text_trgm_idx;
+              DROP INDEX saves_search_idx;
+              ALTER TABLE saves DROP COLUMN search_vector;
+              DROP FUNCTION ari_unaccent(text)

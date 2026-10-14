@@ -18,3 +18,12 @@ databaseChangeLog:
   - include:
       file: v1/006-create-tags.yaml
       relativeToChangelogFile: true
+  - include:
+      file: v1/007-create-notes.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: v1/008-add-search.yaml
+      relativeToChangelogFile: true
+  - include:
+      file: v1/009-add-note-search.yaml
+      relativeToChangelogFile: true

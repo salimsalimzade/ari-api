@@ -1,8 +1,9 @@
 # Ari database
 
-Last updated 2026-10-13. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
+Last updated 2026-10-14. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
 queries with MyBatis. The tables follow what the ari frontend shows: the Library, Sources, Imports,
-Notes and Settings pages, which run on sample data in the page until these tables exist. The
+Notes and Settings pages; Imports and Settings run on sample data in the page until their tables
+exist. The
 sign-in tables (`users`, `refresh_tokens`) exist since F1; every other table arrives with the
 feature that first uses it. The flows that use these tables are in [sequences.md](sequences.md),
 and every table with all its columns is in one diagram in [database-erd.md](database-erd.md).
@@ -259,9 +260,8 @@ erDiagram
     timestamptz updated_at "last edit, orders the list"
   }
   note_blocks {
-    uuid id PK
-    uuid note_id FK
-    int position "order in the note"
+    uuid note_id PK, FK
+    int position PK "order in the note"
     varchar kind "TEXT or QUOTE"
     text text "TEXT only"
     uuid save_id FK "QUOTE only"
@@ -272,8 +272,10 @@ erDiagram
   the save's current color and text.
 - Blocks are rows, not a `jsonb` array, so deleting a save removes its quotes through the foreign key
   and "quoted in a note" on the Sources page is a join.
-- The editor saves as you type: one request replaces a note's blocks in a single transaction.
-  Markdown and PDF export of a note happen in the browser.
+- The editor saves as you type: one request replaces a note's blocks in a single transaction, so a
+  block is keyed by its note and position, not an id of its own. A quote of a save that isn't the
+  user's is left out before the blocks are written. Markdown and PDF export of a note happen in
+  the browser.
 
 ### 1.6 Background jobs
 
@@ -314,17 +316,22 @@ All ids are UUIDs created in code. All times are `timestamptz` in UTC, and `crea
 | `save_tags` | Primary key `(save_id, tag_id)`. FK `save_id` → `saves.id` and FK `tag_id` → `tags.id`, both on delete cascade. Index on `tag_id` |
 | `imports` | FK `source_id` → `sources.id` on delete set null, unique. `file_name varchar(255)`, `content_type varchar(100)`, `size_bytes bigint` check `> 0`, `storage_key varchar(512)`. `status varchar(12)` default `QUEUED`, check the seven statuses. `attempts int` default 1. `error_code varchar(50)`. Index `(user_id, created_at desc)` |
 | `import_marks` | FK `import_id` → `imports.id` on delete cascade. FK `save_id` → `saves.id` on delete set null, unique. `type varchar(12)`, check the six types. `color varchar(10)`, check the five colors. `file_color varchar(20)` nullable. `text` not null. `page_number int` check `> 0`. `image_key varchar(512)`. `selected boolean` not null. Unique `(import_id, position)` |
-| `notes` | `title varchar(200)` not null, default `''`. Index `(user_id, updated_at desc)` |
-| `note_blocks` | FK `note_id` → `notes.id` on delete cascade. FK `save_id` → `saves.id` on delete cascade. `kind varchar(10)`, check `TEXT`/`QUOTE`. Check: a `TEXT` block has `text` and no `save_id`, a `QUOTE` block has `save_id` and no `text`. Unique `(note_id, position)`, index on `save_id` |
+| `notes` | `title varchar(200)` not null, default `''`. `body text` not null, default `''`: the paragraphs joined, written with the blocks, for search. Index `(user_id, updated_at desc)` |
+| `note_blocks` | FK `note_id` → `notes.id` on delete cascade. FK `save_id` → `saves.id` on delete cascade. `kind varchar(10)`, check `TEXT`/`QUOTE`. Check: a `TEXT` block has `text` and no `save_id`, a `QUOTE` block has `save_id` and no `text`. Primary key `(note_id, position)`, `position` from 0, index on `save_id` |
 | `outbox_events` | `aggregate_type varchar(50)`, `event_type varchar(100)`, `routing_key varchar(100)`, `payload jsonb` not null. Partial index on `created_at` where `sent_at is null`, for the publisher. A scheduled job deletes sent rows older than 7 days |
 | `processed_events` | Primary key `(consumer, event_id)`. `consumer varchar(50)`, `event_id varchar(100)`. A scheduled job deletes rows older than 30 days |
 
-Search (F10) adds:
+Search (F10, changeset 008) adds:
 
 - `saves.search_vector tsvector` generated always from `text`, `comment` and `section`, and
   `sources.search_vector` from `name`, `title` and `author`, with the `simple` config and an
-  IMMUTABLE wrapper around `unaccent`, plus a GIN index on each.
-- `pg_trgm` and a GIN trigram index (`gin_trgm_ops`) on `saves.text` for short or partial queries.
+  IMMUTABLE wrapper around `unaccent` (`ari_unaccent`, which names the dictionary), plus a GIN
+  index on each. Every word typed must start a word (`swarm:* & nest:*`).
+- `pg_trgm` and a GIN trigram index (`gin_trgm_ops`) on `ari_unaccent(lower(saves.text))`, for the
+  whole search as part of the text ("bees" in "honeybees").
+- Notes (changeset 009): `notes.search_vector` generated from `title` and `body` (the paragraphs
+  joined, so words from different paragraphs find the note; quotes don't count, their words are
+  the save's), a GIN index on it and a trigram index on `ari_unaccent(lower(title || ' ' || body))`.
 
 ## 3. Plan and upload space
 
@@ -363,11 +370,12 @@ file; add a new one instead.
 | `004-create-sources.yaml` | F2 |
 | `005-create-saves.yaml` | F2, F3 |
 | `006-create-tags.yaml` | F2 (`tags` and `save_tags`) |
-| `007-create-imports.yaml` | F5 (`imports` and `import_marks`) |
-| `008-create-notes.yaml` | Notes, no issue yet (`notes` and `note_blocks`) |
-| `009-add-search.yaml` | F10 |
-| `010-create-processed-events.yaml` | F11 |
-| `011-create-subscriptions-and-invoices.yaml` | F15 |
+| `007-create-notes.yaml` | Notes, no issue (`notes` and `note_blocks`) |
+| `008-add-search.yaml` | F10: `unaccent`, `pg_trgm`, `ari_unaccent`, the `search_vector` columns and their indexes |
+| `009-add-note-search.yaml` | F10 for notes: `notes.body` (backfilled from the paragraphs), its `search_vector` and indexes |
+| `010-create-imports.yaml` | F5 (`imports` and `import_marks`) |
+| `011-create-processed-events.yaml` | F11 |
+| `012-create-subscriptions-and-invoices.yaml` | F15 |
 
 ## 5. Redis and MinIO
 
@@ -385,7 +393,7 @@ flowchart LR
   end
   subgraph redis["Redis 8"]
     bloom["usernames<br/>Bloom filter"]
-    codes["code:extension:*<br/>code:verify-email:*"]
+    codes["code:extension:*<br/>code:verify-email:*<br/>code:password-reset*"]
     rate["rate:*"]
     idem["idem:mail:*"]
   end
@@ -407,6 +415,8 @@ flowchart LR
 | `usernames` | Bloom filter, 0.1% false positives, room for 1,000,000 names, then grows | Every taken username ([sequences §1](sequences.md#1-register-or-sign-in-f1)) | Rebuilt nightly and when missing |
 | `rate:{action}:{ip or user id}:{minute}` | Counter (`INCR`, then `EXPIRE`) | Requests in the current minute, e.g. the username check, 30 a minute per IP | 1 minute |
 | `code:extension:{SHA-256 of the code}` | String: user id | The extension's sign-in code ([sequences §6](sequences.md#6-save-from-the-extension-f13)) | 60 seconds, single use |
+| `code:password-reset:{SHA-256 of the code}` | String: JSON with the user id and when the link expires (30 minutes) | A password's reset link ([sequences §12](sequences.md#12-reset-a-forgotten-password)) | 7 days, so an expired link can say so |
+| `code:password-reset-used:{SHA-256 of the code}` | String, set with `SET NX` | The link changed a password; a second confirm finds it | 7 days |
 | `code:verify-email:{SHA-256 of the code}` | String: JSON with the user id and the email (`GETDEL` needs a string) | An email's verify link ([sequences §8](sequences.md#8-add-and-verify-an-email)) | 24 hours, single use |
 | `idem:mail:{event id}` | String: `sending`, then `sent` | `sending` while a mail sender works on the event, `sent` once the email went out | `sending` 1 minute (a crashed sender blocks the event no longer), `sent` 7 days |
 

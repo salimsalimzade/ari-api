@@ -5,7 +5,7 @@ description: Setup guide and roadmap for ari-api, the Java / Spring Boot backend
 
 # ari-api: backend setup guide and roadmap
 
-Last updated 2026-10-13. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
+Last updated 2026-10-14. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
 
 - **ari-api** (this repo): the Java / Spring Boot backend.
 - **ari**: the frontend (SolidStart website now, browser extension later). It calls this API from
@@ -118,7 +118,8 @@ ari-api/
     │       │   │   ├── repository/     # SaveRepository, TagRepository (ports)
     │       │   │   └── service/        # SaveService + impl/SaveServiceImpl (also stores image clips through ObjectStorage)
     │       │   └── infrastructure/     # SaveMyBatisRepository, TagMyBatisRepository (@Mapper extending the ports)
-    │       ├── source/                 # built: the page or file a save came from; facade only, no endpoints yet (the Sources page comes next)
+    │       ├── source/                 # built: the page or file a save came from, and the Sources page (GET /sources); its SQL reads the saves and notes tables, never writes them
+    │       ├── note/                   # built: the Notes page (notes, note_blocks); quotes go through SaveFacade
     │       ├── account/                # built: sign-in (password), sessions, the extension's sign-in code, GET /me
     │       ├── mail/                   # listener → facade → MailService; ports for Thymeleaf and SMTP in domain/port; reads no table
     │       ├── fileimport/             # same layout as save; returns a fake finished job ("import" is a Java keyword)
@@ -155,7 +156,11 @@ Rules:
 - **Transactions:** `@Transactional` on facade use cases, so a use case saves all or nothing.
 - **Between features:** call the other feature's facade; never use its domain or infrastructure.
   `ArchitectureTest` (ArchUnit) checks this and the layer directions: presentation → application →
-  domain, and infrastructure → domain only.
+  domain, and infrastructure → domain only. When asking a facade would make two facades depend on
+  each other, a feature's SQL may read (never write) the other's table, and the other's enum values
+  cross as text: the Sources page sums up `saves` and the notes quoting them in
+  `SourceMyBatisRepository.xml`, because the save facade already calls the source facade (and the
+  note facade calls the save facade).
 - Records for DTOs, constructor injection, an injected `Clock`, UUID ids, all times in UTC.
 - **CORS:** allow the frontend's origin with credentials (the sign-in cookies), read from
   `app.cors.allowed-origins` in `application.yml`, which takes `APP_CORS_ALLOWED_ORIGINS`
@@ -188,6 +193,17 @@ public record SaveResponse(
     List<String> tags, SourceResponse source, Instant createdAt) {}
 public record SourceResponse(UUID id, SourceKind kind, String name, String title, String author, String url) {}
 public record FacetsResponse(int total, List<TypeCount> types, List<TagFacet> tags, List<ColorFacet> colors, List<SourceFacet> sources) {}
+public record SourceSummaryResponse(
+    UUID id, SourceKind kind, String name, String title, String author, String url, // as SourceResponse
+    int savesCount, int highlightsCount, int clipsCount, int importsCount,
+    List<String> colors, LatestHighlight latestHighlight, // colors: most used first; latestHighlight: left out when nothing has a color
+    Instant firstSavedAt, Instant lastSavedAt) {}
+public record LatestHighlight(String text, String color) {}
+public record SourceCountsResponse(int total, List<KindCount> kinds) {} // KindCount(SourceKind kind, int count), both kinds
+// SourceSummaryResponse also has List<QuotingNote> notes: QuotingNote(UUID id, String title, int quotesCount)
+public record NoteSummaryResponse(UUID id, String title, List<UUID> saveIds, boolean empty, Instant createdAt, Instant updatedAt) {}
+public record NoteResponse(UUID id, String title, List<NoteBlockResponse> blocks, Instant createdAt, Instant updatedAt) {}
+public record NoteBlockResponse(NoteBlockKind kind, String text, SaveResponse save) {} // text: TEXT only; save: QUOTE only
 public record ImportJobResponse(UUID id, String fileName, ImportStatus status, int highlightsCount) {}
 public record PageResponse<T>(List<T> items, String nextCursor) {}
 
@@ -196,6 +212,8 @@ enum SaveKind { HIGHLIGHT, CLIP, IMPORT }
 enum ClipType { TABLE, IMAGE }
 enum HighlightColor { YELLOW, GREEN, BLUE, PINK, PURPLE }
 enum SourceKind { WEBSITE, FILE }
+enum SaveOrder { NEWEST, PAGE }
+enum NoteBlockKind { TEXT, QUOTE }
 enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 ```
 
@@ -217,20 +235,29 @@ enum ImportStatus { QUEUED, PROCESSING, DONE, FAILED }
 | `PUT /me/email` `{ email }` | `account` | 202 + `MeResponse`, `pendingEmail` set and its verify link queued (200, nothing sent, when it already is the verified email); 429 `RATE_LIMITED` over 1 a minute or 5 a day |
 | `POST /me/email/resend` | `account` | 202 + `MeResponse`; 400 when no email is pending; 429 `RATE_LIMITED` |
 | `DELETE /me/email` | `account` | 204, clears the verified and the pending email |
+| `POST /auth/password-reset` `{ login }` | `account` | Public. 204, a reset link (30 minutes, single use) queued to the verified email of the account with that username or verified email, in the `ari_lang` language; 404 `ACCOUNT_NOT_FOUND`; 409 `NO_EMAIL`, `EMAIL_NOT_CONFIRMED`; 429 `RATE_LIMITED` over 20 an hour per address or the account's 1 email a minute, 5 a day |
+| `POST /auth/password-reset/check` `{ code }` | `account` | Public. 200 `{ username }`, without using the link up; 401 `INVALID_CODE`; 410 `CODE_EXPIRED`, `CODE_USED` |
+| `POST /auth/password-reset/confirm` `{ code, password }` | `account` | Public. 204, the new password (sign-up rules), the link used up and every session of the account ended; the same code errors |
 | `POST /auth/verify-email` `{ code }` | `account` | Public. 204, the pending email becomes the verified one; 401 `INVALID_CODE`; 409 `EMAIL_TAKEN` |
 | `POST /saves` `{ kind, color, clipType, text, contentMd, comment, section, tags, source: { url, name, title, author } }` | `save` | 201 + `SaveResponse`. A `HIGHLIGHT` needs a `color`; a `CLIP` has no color and a `clipType`: a `TABLE` its `contentMd`. The source is found by its address (fragment dropped) or created. 400 `VALIDATION_FAILED`, `INVALID_SAVE`, `INVALID_URL`. No plan or count limit yet |
 | `POST /saves` (multipart: `save` JSON part, `image` part) | `save` | An image clip (`kind CLIP`, `clipType IMAGE`): a JPEG, PNG or WebP of at most 2 MB, stored in MinIO first. 201 + `SaveResponse` with `imageUrl`; 400 `INVALID_IMAGE`, 413 `FILE_TOO_LARGE` |
-| `GET /saves?type=&tag=&color=&source=&cursor=&limit=` | `save` | The signed-in user's saves, newest first, 40 per page (`limit` 1 to 100); `tag`, `color` and `source` repeat; any value within a group, every group given. `PageResponse<SaveResponse>`; 400 `INVALID_CURSOR` |
-| `GET /saves/facets?type=&tag=&color=&source=` | `save` | Type tab counts (among the saves that match the filters) and the tag, color and source choices with their counts (whole Library) |
+| `GET /saves?type=&tag=&color=&source=&q=&order=&cursor=&limit=` | `save` | The signed-in user's saves, newest first, 40 per page (`limit` 1 to 100); `tag`, `color` and `source` repeat; any value within a group, every group given. `q` (F10): words that start words of the text, comment or section, or of the source's name, title or author (`SourceFacade.findIdsMatching`), or part of the text; accents and case don't count. `order=PAGE`: by page number (none counts as 0), then oldest first, for a source's page. `PageResponse<SaveResponse>`; 400 `INVALID_CURSOR`, also for a cursor of the other order |
+| `GET /saves/facets?type=&tag=&color=&source=&q=` | `save` | Type tab counts (among the saves that match the filters) and the tag, color and source choices with their counts (whole Library) |
 | `GET /saves/{id}` | `save` | One save with its source and tags (`SaveResponse`), for the website's reading view; 404 `NOT_FOUND`, also for someone else's |
 | `PATCH /saves/{id}` `{ color, comment, tags }` | `save` | A field left out stays; `tags` replaces them all. 200 + `SaveResponse`; 404 `NOT_FOUND`; 400 `INVALID_SAVE` for a color on a clip |
 | `DELETE /saves/{id}` | `save` | 204; its image is deleted after the commit; `users.saves_count` follows; 404 `NOT_FOUND` |
+| `GET /sources?kind=&q=&cursor=&limit=` | `source` | The Sources page: the user's sources with saves, the one saved from most recently first, 40 per page (`limit` 1 to 100); `q` searches the name, title and author (F10). `PageResponse<SourceSummaryResponse>`; 400 `INVALID_CURSOR` |
+| `GET /sources/counts` | `source` | `SourceCountsResponse`: sources with saves, in all and per kind (the kind tabs) |
+| `GET /sources/{id}` | `source` | One source with what is saved from it (`SourceSummaryResponse`); its saves come from `GET /saves?source={id}&order=PAGE`. 404 `NOT_FOUND`, also for someone else's or one with no saves left |
+| `GET /notes?q=` | `note` | `NoteSummaryResponse[]`: every note, the one changed most recently first, without its text; `q` searches the title and paragraphs (F10) |
+| `POST /notes` `{ title, blocks: [{ kind, text, saveId }] }` | `note` | 201 + `NoteResponse`. A `TEXT` block has `text` (empty for a blank paragraph), a `QUOTE` block a `saveId`; quotes of saves that aren't the user's are left out. 400 `VALIDATION_FAILED` (title over 200, over 1000 blocks, a paragraph over 20000), `INVALID_NOTE` |
+| `GET /notes/{id}` | `note` | `NoteResponse`, each quote with its save as it is now; 404 `NOT_FOUND`, also for someone else's |
+| `PUT /notes/{id}` (as `POST`) | `note` | 200 + `NoteResponse`: the title and every block replace what was there, in one transaction; 404 `NOT_FOUND` |
+| `DELETE /notes/{id}` | `note` | 204; the saves it quotes stay; 404 `NOT_FOUND` |
 | `POST /imports` (multipart `file`) | `fileimport` | Ignores the file content; returns a `DONE` job with 0 highlights |
 | `GET /imports/{id}` | `fileimport` | Returns that job |
 
-Saves, tags and sources are real PostgreSQL data (changesets 004 to 006); there is no sample data.
-`GET /sources` and `GET /sources/{id}` for the Sources page, and the library search (`q`, F10),
-come next.
+Saves, tags, sources and notes are real PostgreSQL data (changesets 004 to 009); there is no sample data.
 
 ## 6. Formatting, linting and CI (on commit, push and pull request)
 
@@ -433,9 +460,12 @@ Do these in order, one at a time:
 2. **Auth (done, F1):** Spring Security; our own JWT access tokens (15 minutes) plus rotating
    refresh tokens (httpOnly cookies for the website); username +
    password with bcrypt (email is optional and comes later, for password changes). Google sign-in (F9) is postponed. Rules in `docs/architecture.md`.
-3. **Search:** Postgres full-text search: a generated `tsvector` column with the `simple` config, an
-   IMMUTABLE wrapper around `unaccent`, a GIN index, and `pg_trgm` for short or partial queries.
-   Added as a Liquibase changeset.
+3. **Search (done, F10):** Postgres full-text search: a generated `tsvector` column with the
+   `simple` config, an IMMUTABLE wrapper around `unaccent` (`ari_unaccent`), a GIN index, and
+   `pg_trgm` for part of a word, in changeset 008 (saves and sources) and 009 (notes, over
+   `notes.body`, the paragraphs joined). `common/search/SearchText` turns what is typed
+   into a prefix `to_tsquery` text and a `LIKE` pattern. Results stay newest first (no ranking),
+   so the cursor works as without a search.
 4. **File imports:** `common/client/ObjectStorage` talks to MinIO through the AWS SDK's S3 client
    (path-style, checksums only where required), so any S3-compatible server can replace it by
    config. MinIO's own images are no longer published and its community edition is archived, so

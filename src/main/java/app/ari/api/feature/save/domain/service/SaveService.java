@@ -7,8 +7,11 @@ import app.ari.api.feature.save.domain.model.SaveChange;
 import app.ari.api.feature.save.domain.model.SaveCursor;
 import app.ari.api.feature.save.domain.model.SaveFacets;
 import app.ari.api.feature.save.domain.model.SaveFilter;
+import app.ari.api.feature.save.domain.model.SaveOrder;
 import app.ari.api.feature.save.domain.model.SavePage;
 import app.ari.api.feature.save.domain.model.TaggedSave;
+import java.util.Collection;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
@@ -27,11 +30,17 @@ public interface SaveService {
   /** The save with its tags; empty when there is no such save, or it is someone else's. */
   Optional<TaggedSave> find(UUID userId, UUID id);
 
+  /** The user's own saves among {@code ids}, with their tags; the others are left out. */
+  List<TaggedSave> findAll(UUID userId, Collection<UUID> ids);
+
   /** Applies the edit; the caller has checked {@link SaveChange#violationFor(Save)}. */
   TaggedSave update(Save save, SaveChange change);
 
-  /** The saves that match {@code filter}, newest first, after the cursor when given. */
-  SavePage page(UUID userId, SaveFilter filter, SaveCursor after, int limit);
+  /**
+   * The saves that match {@code filter} in {@code order}, after the cursor when given; the cursor
+   * is one made for that order.
+   */
+  SavePage page(UUID userId, SaveFilter filter, SaveOrder order, SaveCursor after, int limit);
 
   SaveFacets facets(UUID userId, SaveFilter filter);
 

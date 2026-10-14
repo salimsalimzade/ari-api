@@ -75,9 +75,13 @@ public interface SaveController {
       summary = "The Library, newest first",
       description =
           "Keyset paging: send nextCursor back as cursor for the next page. It is left out on the"
-              + " last page. The first page is 40 saves unless limit says otherwise.")
+              + " last page. The first page is 40 saves unless limit says otherwise. With"
+              + " order=PAGE and a source, a source's saves come in page order instead, as its"
+              + " page on the website lists them.")
   @ApiResponse(responseCode = "200", description = "One page of saves")
-  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED or INVALID_CURSOR")
+  @ApiResponse(
+      responseCode = "400",
+      description = "VALIDATION_FAILED, or INVALID_CURSOR (also a cursor of the other order)")
   @ApiResponse(responseCode = "401", description = "UNAUTHORIZED")
   @GetMapping
   PageResponse<SaveResponse> list(

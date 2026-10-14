@@ -26,6 +26,11 @@
     WHERE family_id = #{familyId} AND revoked_at IS NULL
   </update>
 
+  <update id="revokeAllOfUser">
+    UPDATE refresh_tokens SET revoked_at = #{at}
+    WHERE user_id = #{userId} AND revoked_at IS NULL
+  </update>
+
   <select id="hasActiveToken" resultType="boolean">
     SELECT EXISTS (
       SELECT 1 FROM refresh_tokens

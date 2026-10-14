@@ -30,12 +30,16 @@ public interface SaveMapper {
   @Mapping(target = "tags", source = "tag")
   @Mapping(target = "colors", source = "color")
   @Mapping(target = "sourceIds", source = "source")
+  @Mapping(target = "query", source = "q")
+  @Mapping(target = "sourcesMatchingQuery", ignore = true)
   SaveFilter toFilter(SaveFilterRequest request);
 
   @Mapping(target = "kind", source = "type")
   @Mapping(target = "tags", source = "tag")
   @Mapping(target = "colors", source = "color")
   @Mapping(target = "sourceIds", source = "source")
+  @Mapping(target = "query", source = "q")
+  @Mapping(target = "sourcesMatchingQuery", ignore = true)
   SaveFilter toFilter(ListSavesRequest request);
 
   /** {@code imageUrl} is the signed link to an image clip's picture, or null for any other save. */

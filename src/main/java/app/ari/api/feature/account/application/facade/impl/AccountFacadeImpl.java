@@ -4,22 +4,32 @@ import app.ari.api.common.client.Queues;
 import app.ari.api.config.WebProperties;
 import app.ari.api.feature.account.application.exception.badrequest.InvalidPhotoException;
 import app.ari.api.feature.account.application.exception.badrequest.NoPendingEmailException;
+import app.ari.api.feature.account.application.exception.conflict.EmailNotConfirmedException;
 import app.ari.api.feature.account.application.exception.conflict.EmailTakenException;
+import app.ari.api.feature.account.application.exception.conflict.NoEmailException;
 import app.ari.api.feature.account.application.exception.conflict.UsernameTakenException;
+import app.ari.api.feature.account.application.exception.gone.ResetCodeExpiredException;
+import app.ari.api.feature.account.application.exception.gone.ResetCodeUsedException;
+import app.ari.api.feature.account.application.exception.notfound.AccountNotFoundException;
 import app.ari.api.feature.account.application.exception.toomanyrequests.EmailRateLimitedException;
 import app.ari.api.feature.account.application.exception.toomanyrequests.UsernameCheckRateLimitedException;
 import app.ari.api.feature.account.application.exception.unauthorized.ExtensionSessionExpiredException;
 import app.ari.api.feature.account.application.exception.unauthorized.InvalidCredentialsException;
 import app.ari.api.feature.account.application.exception.unauthorized.InvalidEmailCodeException;
 import app.ari.api.feature.account.application.exception.unauthorized.InvalidExtensionCodeException;
+import app.ari.api.feature.account.application.exception.unauthorized.InvalidResetCodeException;
 import app.ari.api.feature.account.application.exception.unauthorized.SessionExpiredException;
 import app.ari.api.feature.account.application.facade.AccountFacade;
 import app.ari.api.feature.account.application.mapper.AccountMapper;
+import app.ari.api.feature.account.application.model.message.ResetPasswordMessage;
 import app.ari.api.feature.account.application.model.message.VerifyEmailMessage;
 import app.ari.api.feature.account.application.model.request.EmailRequest;
 import app.ari.api.feature.account.application.model.request.ExtensionCodeRequest;
 import app.ari.api.feature.account.application.model.request.ExtensionRefreshRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetCheckRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetConfirmRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetRequest;
 import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
@@ -27,13 +37,17 @@ import app.ari.api.feature.account.application.model.response.AuthTokens;
 import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
 import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
 import app.ari.api.feature.account.application.model.response.MeResponse;
+import app.ari.api.feature.account.application.model.response.PasswordResetCheckResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
+import app.ari.api.feature.account.domain.model.ResetLink;
+import app.ari.api.feature.account.domain.model.ResetRecipient;
 import app.ari.api.feature.account.domain.model.TokenClient;
 import app.ari.api.feature.account.domain.model.User;
 import app.ari.api.feature.account.domain.model.Usernames;
 import app.ari.api.feature.account.domain.service.AccountService;
 import app.ari.api.feature.account.domain.service.EmailService;
+import app.ari.api.feature.account.domain.service.PasswordResetService;
 import app.ari.api.feature.account.domain.service.PhotoService;
 import app.ari.api.feature.account.domain.service.TokenService;
 import app.ari.api.feature.account.domain.service.UsernameService;
@@ -50,9 +64,9 @@ import org.springframework.web.util.UriComponentsBuilder;
  * Sign-in use cases. Register and login each run in one transaction, so a user is never saved
  * without its session. Refresh, logout and the extension's sign-in get theirs inside {@link
  * TokenService}: a revoked session must stay revoked even though the request then fails with a 401.
- * An email's verify link is queued in the outbox in the same transaction as the pending email. The
- * photo use cases are not one transaction: the file goes to storage first, then a single row update
- * points at it.
+ * An email's verify link is queued in the outbox in the same transaction as the pending email, and
+ * a password's reset link with its request. The photo use cases are not one transaction: the file
+ * goes to storage first, then a single row update points at it.
  */
 @Service
 public class AccountFacadeImpl implements AccountFacade {
@@ -62,6 +76,7 @@ public class AccountFacadeImpl implements AccountFacade {
   private final EmailService emailService;
   private final PhotoService photoService;
   private final UsernameService usernameService;
+  private final PasswordResetService passwordResetService;
   private final OutboxFacade outbox;
   private final WebProperties web;
   private final AccountMapper mapper;
@@ -72,6 +87,7 @@ public class AccountFacadeImpl implements AccountFacade {
       EmailService emailService,
       PhotoService photoService,
       UsernameService usernameService,
+      PasswordResetService passwordResetService,
       OutboxFacade outbox,
       WebProperties web,
       AccountMapper mapper) {
@@ -80,6 +96,7 @@ public class AccountFacadeImpl implements AccountFacade {
     this.emailService = emailService;
     this.photoService = photoService;
     this.usernameService = usernameService;
+    this.passwordResetService = passwordResetService;
     this.outbox = outbox;
     this.web = web;
     this.mapper = mapper;
@@ -212,6 +229,51 @@ public class AccountFacadeImpl implements AccountFacade {
 
   @Override
   @Transactional
+  public void requestPasswordReset(
+      PasswordResetRequest request, String language, String clientAddress) {
+    // Before the lookup, so nobody can try many usernames or emails.
+    if (!passwordResetService.mayRequest(clientAddress)) {
+      throw new EmailRateLimitedException();
+    }
+    ResetRecipient recipient = passwordResetService.recipient(request.login());
+    User user =
+        switch (recipient.status()) {
+          case FOUND -> recipient.user();
+          case NO_ACCOUNT -> throw new AccountNotFoundException();
+          case NO_EMAIL -> throw new NoEmailException();
+          case EMAIL_NOT_CONFIRMED -> throw new EmailNotConfirmedException();
+        };
+    // The same limits as verify links: the account's emails share them.
+    if (!emailService.mayRequestLink(user.id())) {
+      throw new EmailRateLimitedException();
+    }
+    String link =
+        UriComponentsBuilder.fromUriString(web.url())
+            .path("/reset-password")
+            .queryParam("code", passwordResetService.newCode(user.id()))
+            .toUriString();
+    ResetPasswordMessage message =
+        new ResetPasswordMessage(
+            user.email(), user.fullName(), user.username(), languageOf(language), link);
+    outbox.add(
+        new NewOutboxEvent(
+            "USER", user.id(), "ResetPassword", Queues.EMAIL_TRANSACTIONAL, message));
+  }
+
+  @Override
+  public PasswordResetCheckResponse checkPasswordReset(PasswordResetCheckRequest request) {
+    return new PasswordResetCheckResponse(
+        validUser(passwordResetService.check(request.code())).username());
+  }
+
+  @Override
+  @Transactional
+  public void resetPassword(PasswordResetConfirmRequest request) {
+    validUser(passwordResetService.reset(request.code(), request.password()));
+  }
+
+  @Override
+  @Transactional
   public MeResponse updateProfile(UUID userId, ProfileRequest request) {
     String before = currentUser(userId).username();
     User user =
@@ -260,6 +322,16 @@ public class AccountFacadeImpl implements AccountFacade {
   @Transactional
   public void changeSavesCount(UUID userId, int delta) {
     accountService.changeSavesCount(userId, delta);
+  }
+
+  /** The link's user; throws the error that says why the link doesn't work. */
+  private static User validUser(ResetLink link) {
+    return switch (link.status()) {
+      case VALID -> link.user();
+      case EXPIRED -> throw new ResetCodeExpiredException();
+      case USED -> throw new ResetCodeUsedException();
+      case INVALID -> throw new InvalidResetCodeException();
+    };
   }
 
   private MeResponse toMe(User user) {

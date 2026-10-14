@@ -4,12 +4,16 @@ import app.ari.api.feature.account.application.model.request.EmailRequest;
 import app.ari.api.feature.account.application.model.request.ExtensionCodeRequest;
 import app.ari.api.feature.account.application.model.request.ExtensionRefreshRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetCheckRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetConfirmRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetRequest;
 import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
 import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
 import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
 import app.ari.api.feature.account.application.model.response.MeResponse;
+import app.ari.api.feature.account.application.model.response.PasswordResetCheckResponse;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
 import app.ari.api.feature.account.presentation.cookie.AuthCookies;
 import io.swagger.v3.oas.annotations.Operation;
@@ -209,6 +213,66 @@ public interface AccountController {
   @ApiResponse(responseCode = "409", description = "EMAIL_TAKEN: another account verified it first")
   @PostMapping("/auth/verify-email")
   ResponseEntity<Void> verifyEmail(@Valid @RequestBody VerifyEmailRequest request);
+
+  @Operation(
+      summary = "Email a link to reset a forgotten password",
+      description =
+          "Public. Takes a username, or an account's verified email, and emails a link to that"
+              + " account's verified email, in the language of the ari_lang cookie. The link works"
+              + " once, for 30 minutes. The answer says why no link was sent, so it tells whether"
+              + " an account exists; at most 20 requests an hour come from one address.")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "204", description = "The link is on its way")
+  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @ApiResponse(
+      responseCode = "404",
+      description = "ACCOUNT_NOT_FOUND: no account has that username or verified email")
+  @ApiResponse(
+      responseCode = "409",
+      description =
+          "NO_EMAIL: the account has no email; EMAIL_NOT_CONFIRMED: its email (or the one given)"
+              + " still waits for its verify link")
+  @ApiResponse(
+      responseCode = "429",
+      description =
+          "RATE_LIMITED: over 20 requests an hour from this address, or the account's 1 email a"
+              + " minute, 5 a day")
+  @PostMapping("/auth/password-reset")
+  ResponseEntity<Void> requestPasswordReset(
+      @Valid @RequestBody PasswordResetRequest request,
+      @Parameter(hidden = true) @CookieValue(name = LANGUAGE_COOKIE, required = false)
+          String language,
+      @Parameter(hidden = true) HttpServletRequest httpRequest);
+
+  @Operation(
+      summary = "Whose password a reset link changes",
+      description =
+          "Public. Checking never uses the link up, so the reset page can check while it renders.")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "200", description = "The link works, for this username")
+  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @ApiResponse(responseCode = "401", description = "INVALID_CODE: an unknown link")
+  @ApiResponse(
+      responseCode = "410",
+      description = "CODE_EXPIRED: over 30 minutes old; CODE_USED: it changed a password already")
+  @PostMapping("/auth/password-reset/check")
+  PasswordResetCheckResponse checkPasswordReset(
+      @Valid @RequestBody PasswordResetCheckRequest request);
+
+  @Operation(
+      summary = "Set a new password with a reset link",
+      description =
+          "Public. Uses the link up and ends every session of the account, the website's and the"
+              + " extension's; the user signs in again with the new password.")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "204", description = "The password is changed")
+  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @ApiResponse(responseCode = "401", description = "INVALID_CODE: an unknown link")
+  @ApiResponse(
+      responseCode = "410",
+      description = "CODE_EXPIRED: over 30 minutes old; CODE_USED: it changed a password already")
+  @PostMapping("/auth/password-reset/confirm")
+  ResponseEntity<Void> resetPassword(@Valid @RequestBody PasswordResetConfirmRequest request);
 
   @Operation(summary = "Change the full name, username and date of birth")
   @ApiResponse(responseCode = "200", description = "The updated user")

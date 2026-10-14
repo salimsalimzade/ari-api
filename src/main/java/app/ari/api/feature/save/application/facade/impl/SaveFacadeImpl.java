@@ -22,12 +22,14 @@ import app.ari.api.feature.save.domain.model.SaveChange;
 import app.ari.api.feature.save.domain.model.SaveCursor;
 import app.ari.api.feature.save.domain.model.SaveFacets;
 import app.ari.api.feature.save.domain.model.SaveFilter;
+import app.ari.api.feature.save.domain.model.SaveOrder;
 import app.ari.api.feature.save.domain.model.SavePage;
 import app.ari.api.feature.save.domain.model.SourceCount;
 import app.ari.api.feature.save.domain.model.TaggedSave;
 import app.ari.api.feature.save.domain.service.SaveService;
 import app.ari.api.feature.source.application.facade.SourceFacade;
 import app.ari.api.feature.source.application.model.response.SourceResponse;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -77,11 +79,21 @@ public class SaveFacadeImpl implements SaveFacade {
 
   @Override
   public PageResponse<SaveResponse> list(UUID userId, ListSavesRequest request) {
+    SaveOrder order = request.ordering();
+    // A cursor goes on only in the order it was made for.
     SaveCursor after =
         request.cursor() == null
             ? null
-            : SaveCursor.decode(request.cursor()).orElseThrow(InvalidCursorException::new);
-    SavePage page = saveService.page(userId, mapper.toFilter(request), after, request.pageSize());
+            : SaveCursor.decode(request.cursor())
+                .filter(cursor -> cursor.order() == order)
+                .orElseThrow(InvalidCursorException::new);
+    SavePage page =
+        saveService.page(
+            userId,
+            matchingSources(userId, mapper.toFilter(request)),
+            order,
+            after,
+            request.pageSize());
     Map<UUID, SourceResponse> pageSources =
         sources.findAll(
             userId,
@@ -95,7 +107,7 @@ public class SaveFacadeImpl implements SaveFacade {
 
   @Override
   public FacetsResponse facets(UUID userId, SaveFilterRequest request) {
-    SaveFilter filter = mapper.toFilter(request);
+    SaveFilter filter = matchingSources(userId, mapper.toFilter(request));
     SaveFacets facets = saveService.facets(userId, filter);
     Set<UUID> sourceIds =
         facets.sources().stream().map(SourceCount::sourceId).collect(Collectors.toSet());
@@ -107,6 +119,19 @@ public class SaveFacadeImpl implements SaveFacade {
     TaggedSave tagged = saveService.find(userId, id).orElseThrow(SaveNotFoundException::new);
     UUID sourceId = tagged.save().sourceId();
     return toResponse(tagged, sources.findAll(userId, Set.of(sourceId)).get(sourceId));
+  }
+
+  @Override
+  public Map<UUID, SaveResponse> findAll(UUID userId, Collection<UUID> ids) {
+    List<TaggedSave> found = saveService.findAll(userId, ids);
+    Map<UUID, SourceResponse> foundSources =
+        sources.findAll(
+            userId, found.stream().map(item -> item.save().sourceId()).collect(Collectors.toSet()));
+    return found.stream()
+        .collect(
+            Collectors.toMap(
+                item -> item.save().id(),
+                item -> toResponse(item, foundSources.get(item.save().sourceId()))));
   }
 
   @Override
@@ -129,6 +154,20 @@ public class SaveFacadeImpl implements SaveFacade {
     Save deleted = saveService.delete(userId, id).orElseThrow(SaveNotFoundException::new);
     accounts.changeSavesCount(userId, -1);
     AfterCommit.run(() -> saveService.discardImage(deleted));
+  }
+
+  /** A search also finds the saves of the sources it matches, which the source feature knows. */
+  private SaveFilter matchingSources(UUID userId, SaveFilter filter) {
+    if (filter.query() == null) {
+      return filter;
+    }
+    return new SaveFilter(
+        filter.kind(),
+        filter.tags(),
+        filter.colors(),
+        filter.sourceIds(),
+        filter.query(),
+        sources.findIdsMatching(userId, filter.query()));
   }
 
   private SaveResponse toResponse(TaggedSave tagged, SourceResponse source) {

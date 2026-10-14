@@ -6,12 +6,16 @@ import app.ari.api.feature.account.application.model.request.EmailRequest;
 import app.ari.api.feature.account.application.model.request.ExtensionCodeRequest;
 import app.ari.api.feature.account.application.model.request.ExtensionRefreshRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetCheckRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetConfirmRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetRequest;
 import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
 import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
 import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
 import app.ari.api.feature.account.application.model.response.MeResponse;
+import app.ari.api.feature.account.application.model.response.PasswordResetCheckResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
 import app.ari.api.feature.account.presentation.AccountController;
@@ -122,6 +126,24 @@ public class AccountControllerImpl implements AccountController {
   @Override
   public ResponseEntity<Void> verifyEmail(@Valid VerifyEmailRequest request) {
     facade.verifyEmail(request);
+    return ResponseEntity.noContent().build();
+  }
+
+  @Override
+  public ResponseEntity<Void> requestPasswordReset(
+      @Valid PasswordResetRequest request, String language, HttpServletRequest httpRequest) {
+    facade.requestPasswordReset(request, language, httpRequest.getRemoteAddr());
+    return ResponseEntity.noContent().build();
+  }
+
+  @Override
+  public PasswordResetCheckResponse checkPasswordReset(@Valid PasswordResetCheckRequest request) {
+    return facade.checkPasswordReset(request);
+  }
+
+  @Override
+  public ResponseEntity<Void> resetPassword(@Valid PasswordResetConfirmRequest request) {
+    facade.resetPassword(request);
     return ResponseEntity.noContent().build();
   }
 

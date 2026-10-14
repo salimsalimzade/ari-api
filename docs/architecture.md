@@ -175,17 +175,23 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 | `VALIDATION_FAILED` | 400 | Bad body, query or upload (file type or size) |
 | `UNAUTHORIZED` | 401 | Missing, expired or invalid token, sign-in code or webhook signature |
 | `INVALID_CREDENTIALS` | 401 | Wrong username or password |
-| `INVALID_CODE` | 401 | An email's verify link, or the extension's sign-in code, is unknown, expired or used; or a newer address is waiting for its link |
+| `INVALID_CODE` | 401 | An email's verify link, or the extension's sign-in code, is unknown, expired or used; or a newer address is waiting for its link; or a password's reset link is unknown (an expired or used one is 410) |
 | `NOT_FOUND` | 404 | The item does not exist or belongs to another user |
 | `INVALID_SAVE` | 400 | A save breaks the rules of its kind: a highlight without a color, a clip with one or without a clip type, a table clip without Markdown, an image clip without its image, an `IMPORT` posted directly; or a color set on a clip |
 | `INVALID_IMAGE` | 400 | A clip's image isn't a JPEG, PNG or WebP by its bytes, or is over 2 MB |
 | `INVALID_URL` | 400 | A source's address isn't an http or https address of at most 2048 characters |
-| `INVALID_CURSOR` | 400 | A list cursor the API did not make |
+| `INVALID_CURSOR` | 400 | A list cursor the API did not make, or one made for the list's other order |
+| `ACCOUNT_NOT_FOUND` | 404 | No account has the username or verified email a reset link was asked for |
+| `NO_EMAIL` | 409 | The account has no email to send a reset link to |
+| `EMAIL_NOT_CONFIRMED` | 409 | The email still waits for its verify link; a pending email never gets a reset link |
+| `CODE_EXPIRED` | 410 | A reset link older than its 30 minutes |
+| `CODE_USED` | 410 | A reset link that changed a password already |
+| `INVALID_NOTE` | 400 | A note's block holds what its kind doesn't: a `TEXT` block without text or with a save, a `QUOTE` block without a save or with text |
 | `USERNAME_TAKEN` | 409 | Register, or change the profile to, a username that is already used, in any case |
 | `INVALID_PHOTO` | 400 | A profile photo that isn't a JPEG, PNG or WebP image by its bytes, or is over 2 MB |
 | `FILE_TOO_LARGE` | 413 | An upload over the server's limit (2 MB for a profile photo or a clip's image) |
 | `EMAIL_TAKEN` | 409 | A verify link is opened for an address another account verified first |
-| `RATE_LIMITED` | 429 | Too many requests in a minute (Redis counters), e.g. the username check |
+| `RATE_LIMITED` | 429 | Too many requests in a minute (Redis counters), e.g. the username check, or over the limits of email links and reset requests |
 
 ## 5. How it is built
 

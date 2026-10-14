@@ -1,0 +1,39 @@
+databaseChangeLog:
+  - changeSet:
+      id: 009-add-note-search
+      author: ari
+      changes:
+        # The note's paragraphs joined, so a search can find words from different paragraphs.
+        # note_blocks stays what the note is; the service writes this with the blocks.
+        - addColumn:
+            tableName: notes
+            columns:
+              - column:
+                  name: body
+                  type: text
+                  defaultValue: ''
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              UPDATE notes n SET body = coalesce(
+                (SELECT string_agg(b.text, ' ' ORDER BY b.position) FROM note_blocks b
+                 WHERE b.note_id = n.id AND b.kind = 'TEXT'), '')
+        - sql:
+            sql: >-
+              ALTER TABLE notes ADD COLUMN search_vector tsvector GENERATED ALWAYS AS (
+                to_tsvector('simple', ari_unaccent(title || ' ' || body))
+              ) STORED
+        - sql:
+            sql: CREATE INDEX notes_search_idx ON notes USING gin (search_vector)
+        - sql:
+            sql: >-
+              CREATE INDEX notes_text_trgm_idx ON notes
+              USING gin (ari_unaccent(lower(title || ' ' || body)) gin_trgm_ops)
+      rollback:
+        - sql:
+            sql: >-
+              DROP INDEX notes_text_trgm_idx;
+              DROP INDEX notes_search_idx;
+              ALTER TABLE notes DROP COLUMN search_vector;
+              ALTER TABLE notes DROP COLUMN body

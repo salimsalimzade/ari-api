@@ -17,6 +17,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
+import java.sql.Timestamp;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -380,6 +381,66 @@ class SaveControllerTest {
   }
 
   @Test
+  void listsAWebPagesSavesInTheOrderTheyWereSaved() {
+    Account account = signUp();
+    String source = text(create(account, highlight("first", "BLUE", "[]", PAGE)), "$.source.id");
+    clock.advance(Duration.ofSeconds(1));
+    create(account, highlight("second", "BLUE", "[]", PAGE));
+    clock.advance(Duration.ofSeconds(1));
+    create(account, highlight("elsewhere", "BLUE", "[]", "https://hive.example/queens"));
+    create(account, highlight("third", "BLUE", "[]", PAGE));
+
+    assertThat(texts(list(account, "source=" + source + "&order=PAGE")))
+        .containsExactly("first", "second", "third");
+    assertThat(texts(list(account, "source=" + source)))
+        .containsExactly("third", "second", "first");
+  }
+
+  @Test
+  void listsAFilesSavesByPageAPageAtATime() {
+    Account account = signUp();
+    UUID file = fileSource(account);
+    importedMark(account, file, "page 3", 3);
+    importedMark(account, file, "page 1, saved first", 1);
+    clock.advance(Duration.ofSeconds(1));
+    importedMark(account, file, "page 2", 2);
+    importedMark(account, file, "page 1, saved later", 1);
+
+    List<String> seen = new ArrayList<>();
+    String cursor = null;
+    do {
+      MvcTestResult page =
+          list(
+              account,
+              "source="
+                  + file
+                  + "&order=PAGE&limit=1"
+                  + (cursor == null ? "" : "&cursor=" + cursor));
+      seen.addAll(texts(page));
+      cursor = body(page).contains("nextCursor") ? text(page, "$.nextCursor") : null;
+    } while (cursor != null);
+
+    assertThat(seen)
+        .containsExactly("page 1, saved first", "page 1, saved later", "page 2", "page 3");
+  }
+
+  @Test
+  void aCursorGoesOnOnlyInTheOrderItWasMadeFor() {
+    Account account = signUp();
+    create(account, highlight("a", "BLUE", "[]", PAGE));
+    create(account, highlight("b", "BLUE", "[]", PAGE));
+    String newest = text(list(account, "limit=1"), "$.nextCursor");
+    String inPageOrder = text(list(account, "order=PAGE&limit=1"), "$.nextCursor");
+
+    MvcTestResult mixed = list(account, "order=PAGE&cursor=" + newest);
+
+    assertThat(mixed).hasStatus(HttpStatus.BAD_REQUEST);
+    assertThat(read(mixed, "$.code")).isEqualTo("INVALID_CURSOR");
+    assertThat(list(account, "cursor=" + inPageOrder)).hasStatus(HttpStatus.BAD_REQUEST);
+    assertThat(list(account, "order=NOPE")).hasStatus(HttpStatus.BAD_REQUEST);
+  }
+
+  @Test
   void refusesACursorItDidNotMake() {
     Account account = signUp();
 
@@ -473,6 +534,82 @@ class SaveControllerTest {
             JsonPath.<List<String>>read(
                 body(facets(account, "source=" + meadowId)), "$.sources[*].id"))
         .hasSize(2);
+  }
+
+  // — Search —
+
+  @Test
+  void searchFindsTheStartsOfWordsInTheTextCommentAndSectionInAnyCaseOrAccent() {
+    Account account = signUp();
+    create(
+        account,
+        """
+        {"kind": "HIGHLIGHT", "color": "BLUE", "text": "Scouts dance for the best nest site",
+         "comment": "Seeley's Ölçü", "section": "Quorum sensing",
+         "source": {"url": "https://meadow.example/a", "name": "Meadow", "title": "T"}}
+        """);
+    create(account, highlight("Something else entirely", "BLUE", "[]", "https://other.example/b"));
+
+    assertThat(texts(list(account, "q=NEST+sco")))
+        .containsExactly("Scouts dance for the best nest site");
+    assertThat(texts(list(account, "q=olcu")))
+        .containsExactly("Scouts dance for the best nest site");
+    assertThat(texts(list(account, "q=quor")))
+        .containsExactly("Scouts dance for the best nest site");
+    assertThat(texts(list(account, "q=nest+else"))).isEmpty();
+  }
+
+  @Test
+  void searchFindsPartOfTheTextAndTheSavesOfAMatchingSource() {
+    Account account = signUp();
+    create(account, highlight("Honeybees choose", "BLUE", "[]", "https://meadow.example/a"));
+    create(
+        account,
+        """
+        {"kind": "HIGHLIGHT", "color": "BLUE", "text": "Queens fly out",
+         "source": {"url": "https://hive.example/q", "name": "Hive Notes",
+                    "title": "Mating Flights", "author": "R. Okafor"}}
+        """);
+
+    assertThat(texts(list(account, "q=bees"))).containsExactly("Honeybees choose");
+    assertThat(texts(list(account, "q=mating"))).containsExactly("Queens fly out");
+    assertThat(texts(list(account, "q=okafor"))).containsExactly("Queens fly out");
+    // LIKE's own characters are only themselves.
+    assertThat(texts(search(account, "bee%", ""))).isEmpty();
+  }
+
+  @Test
+  void searchGoesWithTheFiltersPagesAndCounts() {
+    Account account = signUp();
+    for (int i = 1; i <= 3; i++) {
+      create(account, highlight("swarm " + i, i == 2 ? "PINK" : "BLUE", "[]", PAGE));
+      clock.advance(Duration.ofSeconds(1));
+    }
+    create(account, highlight("unrelated", "PINK", "[]", PAGE));
+
+    MvcTestResult first = list(account, "q=swarm&limit=2");
+    assertThat(texts(first)).containsExactly("swarm 3", "swarm 2");
+    assertThat(texts(list(account, "q=swarm&limit=2&cursor=" + text(first, "$.nextCursor"))))
+        .containsExactly("swarm 1");
+    assertThat(texts(list(account, "q=swarm&color=PINK"))).containsExactly("swarm 2");
+    MvcTestResult counts = facets(account, "q=swarm");
+    assertThat(read(counts, "$.total")).isEqualTo(3);
+    // The choices still count the whole Library.
+    assertThat(JsonPath.<List<Object>>read(body(counts), "$.colors[?(@.color=='PINK')].count"))
+        .containsExactly(2);
+    // Nothing to search for is no search.
+    assertThat(texts(search(account, "&!", ""))).hasSize(4);
+    assertThat(list(account, "q=" + "x".repeat(201))).hasStatus(HttpStatus.BAD_REQUEST);
+  }
+
+  @Test
+  void searchOnlyEverFindsTheSignedInUsersSaves() {
+    Account ada = signUp();
+    Account grace = signUp();
+    create(ada, highlight("private swarm", "BLUE", "[]", PAGE));
+
+    assertThat(texts(list(grace, "q=swarm"))).isEmpty();
+    assertThat(texts(list(grace, "q=meadow"))).isEmpty();
   }
 
   // — One save —
@@ -648,11 +785,11 @@ class SaveControllerTest {
     assertThat(docs).hasStatusOk();
     String json = body(docs);
     assertThat(JsonPath.<List<String>>read(json, "$.paths['/api/v1/saves'].get.parameters[*].name"))
-        .containsExactly("type", "tag", "color", "source", "cursor", "limit");
+        .containsExactly("type", "tag", "color", "source", "q", "order", "cursor", "limit");
     assertThat(
             JsonPath.<List<String>>read(
                 json, "$.paths['/api/v1/saves/facets'].get.parameters[*].name"))
-        .containsExactly("type", "tag", "color", "source");
+        .containsExactly("type", "tag", "color", "source", "q");
     assertThat(JsonPath.<Object>read(json, "$.paths['/api/v1/saves'].post.requestBody.content"))
         .asInstanceOf(InstanceOfAssertFactories.MAP)
         .containsOnlyKeys("application/json", "multipart/form-data");
@@ -693,6 +830,29 @@ class SaveControllerTest {
         .formatted(color, text, tags, url);
   }
 
+  /** An imported file's source; ari-api can't import files yet, so it goes straight in. */
+  private UUID fileSource(Account account) {
+    UUID id = UUID.randomUUID();
+    jdbc.update(
+        "INSERT INTO sources (id, user_id, kind, name, title)"
+            + " VALUES (?, ?, 'FILE', 'swarm-notes.pdf', 'Swarm Notes')",
+        id,
+        account.id());
+    return id;
+  }
+
+  private void importedMark(Account account, UUID sourceId, String text, int page) {
+    jdbc.update(
+        "INSERT INTO saves (id, user_id, source_id, kind, color, text, page_number, created_at)"
+            + " VALUES (?, ?, ?, 'IMPORT', 'YELLOW', ?, ?, ?)",
+        UUID.randomUUID(),
+        account.id(),
+        sourceId,
+        text,
+        page,
+        Timestamp.from(clock.instant()));
+  }
+
   private static String imageClipJson() {
     return """
         {"kind": "CLIP", "clipType": "IMAGE", "text": "Swarm hanging from an oak branch",
@@ -727,6 +887,15 @@ class SaveControllerTest {
   private MvcTestResult list(Account account, String query) {
     return mvc.get()
         .uri("/api/v1/saves?" + query)
+        .cookie(new Cookie(ACCESS, account.accessToken()))
+        .exchange();
+  }
+
+  /** The list with {@code q} as a parameter, so its characters reach the API as they are. */
+  private MvcTestResult search(Account account, String q, String query) {
+    return mvc.get()
+        .uri("/api/v1/saves?" + query)
+        .param("q", q)
         .cookie(new Cookie(ACCESS, account.accessToken()))
         .exchange();
   }

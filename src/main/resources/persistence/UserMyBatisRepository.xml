@@ -52,6 +52,19 @@
     SELECT EXISTS (SELECT 1 FROM users WHERE email = #{email} AND id &lt;&gt; #{exceptUserId})
   </select>
 
+  <select id="findByEmail" resultType="app.ari.api.feature.account.domain.model.User">
+    SELECT <include refid="columns"/> FROM users WHERE email = #{email}
+  </select>
+
+  <select id="isPendingEmail" resultType="boolean">
+    SELECT EXISTS (SELECT 1 FROM users WHERE pending_email = #{email})
+  </select>
+
+  <!-- updated_at stays: it tracks username changes, for the username filter. -->
+  <update id="setPasswordHash">
+    UPDATE users SET password_hash = #{passwordHash} WHERE id = #{id}
+  </update>
+
   <update id="removeEmail">
     UPDATE users
     SET email = NULL, pending_email = NULL, email_verified_at = NULL, updated_at = #{at}

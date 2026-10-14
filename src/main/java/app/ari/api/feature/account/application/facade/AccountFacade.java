@@ -4,6 +4,9 @@ import app.ari.api.feature.account.application.model.request.EmailRequest;
 import app.ari.api.feature.account.application.model.request.ExtensionCodeRequest;
 import app.ari.api.feature.account.application.model.request.ExtensionRefreshRequest;
 import app.ari.api.feature.account.application.model.request.LoginRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetCheckRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetConfirmRequest;
+import app.ari.api.feature.account.application.model.request.PasswordResetRequest;
 import app.ari.api.feature.account.application.model.request.ProfileRequest;
 import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
@@ -11,6 +14,7 @@ import app.ari.api.feature.account.application.model.response.AuthTokens;
 import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
 import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
 import app.ari.api.feature.account.application.model.response.MeResponse;
+import app.ari.api.feature.account.application.model.response.PasswordResetCheckResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
 import java.util.UUID;
@@ -73,6 +77,26 @@ public interface AccountFacade {
 
   /** Throws {@code InvalidEmailCodeException} or {@code EmailTakenException}. */
   void verifyEmail(VerifyEmailRequest request);
+
+  /**
+   * Queues a reset link, in {@code language}, to the verified email of the account with the
+   * request's username or email. Throws {@code AccountNotFoundException}, {@code NoEmailException},
+   * {@code EmailNotConfirmedException}, or {@code EmailRateLimitedException} over 20 requests an
+   * hour from {@code clientAddress} or the account's email limits (1 a minute, 5 a day).
+   */
+  void requestPasswordReset(PasswordResetRequest request, String language, String clientAddress);
+
+  /**
+   * Whose password the link changes, without using it up. Throws {@code InvalidResetCodeException},
+   * {@code ResetCodeExpiredException} or {@code ResetCodeUsedException}.
+   */
+  PasswordResetCheckResponse checkPasswordReset(PasswordResetCheckRequest request);
+
+  /**
+   * Sets the new password, uses the link up and ends every session of the account; throws what
+   * {@link #checkPasswordReset} throws.
+   */
+  void resetPassword(PasswordResetConfirmRequest request);
 
   /** Changes the full name, username and date of birth; throws {@code UsernameTakenException}. */
   MeResponse updateProfile(UUID userId, ProfileRequest request);

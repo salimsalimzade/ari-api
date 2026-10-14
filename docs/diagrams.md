@@ -545,9 +545,8 @@ erDiagram
     timestamptz updated_at "last edit, orders the list"
   }
   note_blocks {
-    uuid id PK
-    uuid note_id FK
-    int position "order in the note"
+    uuid note_id PK, FK
+    int position PK "order in the note"
     varchar kind "TEXT or QUOTE"
     text text "TEXT only"
     uuid save_id FK "QUOTE only"

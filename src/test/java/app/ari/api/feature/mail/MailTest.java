@@ -10,6 +10,7 @@ import app.ari.api.feature.account.presentation.AccountController;
 import app.ari.api.support.IntegrationTest;
 import app.ari.api.support.MailpitInbox;
 import app.ari.api.support.MailpitInbox.CaughtEmail;
+import app.ari.api.support.MutableClock;
 import app.ari.api.support.RabbitTestSupport;
 import jakarta.servlet.http.Cookie;
 import java.time.Duration;
@@ -39,12 +40,15 @@ class MailTest {
 
   private static final Pattern LINK =
       Pattern.compile("http://localhost:3000/verify-email\\?code=[A-Za-z0-9_-]+");
+  private static final Pattern RESET_LINK =
+      Pattern.compile("http://localhost:3000/reset-password\\?code=[A-Za-z0-9_-]+");
   private static final Duration DELIVERY = Duration.ofSeconds(15);
 
   @Autowired private MockMvcTester mvc;
   @Autowired private RabbitTemplate rabbit;
   @Autowired private JsonMapper jsonMapper;
   @Autowired private JavaMailSenderImpl mailSender;
+  @Autowired private MutableClock clock;
 
   @Autowired
   @Qualifier("mailpit") private GenericContainer<?> mailpit;
@@ -132,6 +136,46 @@ class MailTest {
         .containsEntry("mail.smtp.ssl.enable", "false")
         .containsEntry("mail.smtp.timeout", "10000");
     assertThat(mailSender.getUsername()).isEqualTo("ari-test");
+  }
+
+  @Test
+  void aResetLinkGoesToTheVerifiedEmailWithTheUsername() {
+    String accessToken = signUp();
+    String email = newEmail();
+    changeEmail(accessToken, email, "en");
+    String verifyLink = linkIn(awaitOneEmail(email).text());
+    assertThat(
+            mvc.post()
+                .uri("/api/v1/auth/verify-email")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content(
+                    "{\"code\": \"%s\"}"
+                        .formatted(verifyLink.substring(verifyLink.indexOf("code=") + 5)))
+                .exchange())
+        .hasStatus(HttpStatus.NO_CONTENT);
+    // The account's emails share one a minute.
+    clock.advance(Duration.ofSeconds(61));
+
+    assertThat(
+            mvc.post()
+                .uri("/api/v1/auth/password-reset")
+                .contentType(MediaType.APPLICATION_JSON)
+                .content("{\"login\": \"%s\"}".formatted(email))
+                .exchange())
+        .hasStatus(HttpStatus.NO_CONTENT);
+
+    await().atMost(DELIVERY).until(() -> inbox.to(email).size() == 2);
+    CaughtEmail reset = inbox.to(email).getFirst();
+    assertThat(reset.subject()).isEqualTo("Reset your Ari password");
+    assertThat(reset.text())
+        .contains("Hi Test User,")
+        .contains("Someone asked to reset the password of your Ari account post_")
+        .contains("expires in 30 minutes");
+    Matcher link = RESET_LINK.matcher(reset.text());
+    assertThat(link.find()).isTrue();
+    assertThat(reset.html())
+        .contains("href=\"" + link.group() + "\"")
+        .contains("Choose a new password");
   }
 
   private CaughtEmail awaitOneEmail(String address) {

@@ -21,6 +21,9 @@ public interface RefreshTokenRepository {
   /** Revokes every active token of one session. */
   void revokeFamily(UUID familyId, Instant at);
 
+  /** Revokes every active token of the user: every session, the website's and the extension's. */
+  void revokeAllOfUser(UUID userId, Instant at);
+
   /** True while the session has a token that is neither revoked nor expired. */
   boolean hasActiveToken(UUID familyId, Instant now);
 }
