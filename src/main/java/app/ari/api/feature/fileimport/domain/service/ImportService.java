@@ -32,6 +32,12 @@ public interface ImportService {
    */
   FileImport create(UUID userId, String fileName, FileKind kind, byte[] content);
 
+  /**
+   * Adds the import of a photo the browser read already, READING: nothing is stored, and {@link
+   * #finishReading} keeps its marks next.
+   */
+  FileImport createRead(UUID userId, String fileName, String contentType, long sizeBytes);
+
   Optional<FileImport> find(UUID userId, UUID id);
 
   /** The user's imports that aren't dismissed, newest first. */

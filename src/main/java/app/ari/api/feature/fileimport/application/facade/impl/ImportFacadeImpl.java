@@ -10,6 +10,7 @@ import app.ari.api.feature.fileimport.application.exception.payloadtoolarge.Impo
 import app.ari.api.feature.fileimport.application.facade.ImportFacade;
 import app.ari.api.feature.fileimport.application.mapper.ImportMapper;
 import app.ari.api.feature.fileimport.application.model.message.ImportRequested;
+import app.ari.api.feature.fileimport.application.model.request.PhotoImportRequest;
 import app.ari.api.feature.fileimport.application.model.request.ReviewRequest;
 import app.ari.api.feature.fileimport.application.model.response.ImportMarkResponse;
 import app.ari.api.feature.fileimport.application.model.response.ImportResponse;
@@ -19,8 +20,10 @@ import app.ari.api.feature.fileimport.domain.model.FileImport;
 import app.ari.api.feature.fileimport.domain.model.FileKind;
 import app.ari.api.feature.fileimport.domain.model.FileReadException;
 import app.ari.api.feature.fileimport.domain.model.FoundFile;
+import app.ari.api.feature.fileimport.domain.model.FoundMark;
 import app.ari.api.feature.fileimport.domain.model.ImportMark;
 import app.ari.api.feature.fileimport.domain.model.ImportStatus;
+import app.ari.api.feature.fileimport.domain.model.MappedColor;
 import app.ari.api.feature.fileimport.domain.model.MarkColor;
 import app.ari.api.feature.fileimport.domain.model.MarkType;
 import app.ari.api.feature.fileimport.domain.model.ReadFailure;
@@ -124,9 +127,40 @@ public class ImportFacadeImpl implements ImportFacade {
     if (!importService.lockSpace(userId).fits(content.length)) {
       throw new NoSpaceLeftException();
     }
-    FileImport created = importService.create(userId, nameOf(fileName, kind), kind, content);
+    String name = nameOf(fileName, "file." + kind.name().toLowerCase(Locale.ROOT));
+    FileImport created = importService.create(userId, name, kind, content);
     queue(created.id());
     return mapper.toResponse(created, null, null);
+  }
+
+  @Override
+  @Transactional
+  public ImportResponse importPhoto(UUID userId, PhotoImportRequest request) {
+    if (request.sizeBytes() > UploadSpace.LIMIT_BYTES) {
+      throw new ImportTooLargeException();
+    }
+    if (!importService.lockSpace(userId).fits(request.sizeBytes())) {
+      throw new NoSpaceLeftException();
+    }
+    String name = nameOf(request.fileName(), "photo");
+    FileImport created =
+        importService.createRead(userId, name, request.contentType(), request.sizeBytes());
+    List<FoundMark> marks =
+        request.marks().stream()
+            .map(
+                mark ->
+                    new FoundMark(
+                        MarkType.valueOf(mark.type().name()),
+                        MappedColor.ofHex(mark.color()),
+                        mark.text().strip(),
+                        null,
+                        null,
+                        null))
+            .toList();
+    // Without marks it is EMPTY, like a file, and needs no source.
+    UUID sourceId = marks.isEmpty() ? null : sources.createFile(userId, name, null, null).id();
+    importService.finishReading(created, sourceId, marks);
+    return get(userId, created.id());
   }
 
   @Override
@@ -288,12 +322,12 @@ public class ImportFacadeImpl implements ImportFacade {
     return item.sourceId() == null ? null : fileSources.get(item.sourceId());
   }
 
-  /** The file's own name, without folders, fit for its column; or one made from its kind. */
-  private static String nameOf(String fileName, FileKind kind) {
+  /** The file's own name, without folders, fit for its column; or {@code fallback}. */
+  private static String nameOf(String fileName, String fallback) {
     String name = fileName == null ? "" : fileName.replace('\\', '/');
     name = name.substring(name.lastIndexOf('/') + 1).strip();
     if (name.isEmpty()) {
-      name = "file." + kind.name().toLowerCase(Locale.ROOT);
+      name = fallback;
     }
     return name.length() <= FILE_NAME_LENGTH ? name : name.substring(0, FILE_NAME_LENGTH);
   }

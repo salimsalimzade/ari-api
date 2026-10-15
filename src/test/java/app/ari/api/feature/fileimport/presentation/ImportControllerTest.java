@@ -267,6 +267,113 @@ class ImportControllerTest {
   }
 
   @Test
+  void aPhotosMarksAreReadyToReviewAtOnce() {
+    Account account = signUp();
+
+    MvcTestResult imported =
+        photo(
+            account,
+            """
+            {"fileName": "camera/IMG_0412.jpg", "contentType": "image/jpeg", "sizeBytes": 2048,
+             "marks": [
+               {"type": "HIGHLIGHT", "text": "  A colony splits in two. ", "color": "#F2E25C"},
+               {"type": "HIGHLIGHT", "text": "The old queen leaves.", "color": "#FF8A3D"},
+               {"type": "UNDERLINE", "text": "Scouts dance for the best site.",
+                "color": "#2B4FD8"},
+               {"type": "STRIKE", "text": "Bees choose the closest."},
+               {"type": "DRAWN", "text": "Quorum", "color": "#1A1A1A"}
+             ]}
+            """);
+
+    assertThat(imported).hasStatus(HttpStatus.CREATED);
+    assertThat(text(imported, "$.status")).isEqualTo("READY");
+    assertThat(text(imported, "$.fileName")).isEqualTo("IMG_0412.jpg");
+    assertThat(text(imported, "$.title")).isEqualTo("IMG_0412.jpg");
+    assertThat(JsonPath.<List<String>>read(body(imported), "$.marks[*].type"))
+        .containsExactly("HIGHLIGHT", "HIGHLIGHT", "UNDERLINE", "STRIKE", "DRAWN");
+    assertThat(JsonPath.<List<String>>read(body(imported), "$.marks[*].color"))
+        .containsExactly("YELLOW", "YELLOW", "BLUE", "YELLOW", "YELLOW");
+    assertThat(text(imported, "$.marks[1].fileColor")).isEqualTo("ORANGE");
+    assertThat(text(imported, "$.marks[0].text")).isEqualTo("A colony splits in two.");
+    assertThat(JsonPath.<List<Boolean>>read(body(imported), "$.marks[*].selected"))
+        .containsExactly(true, true, true, false, true);
+    assertThat(JsonPath.<Number>read(body(list(account)), "$.space.usedBytes").longValue())
+        .isEqualTo(2048);
+
+    List<String> markIds = JsonPath.read(body(imported), "$.marks[*].id");
+    MvcTestResult reviewed =
+        review(
+            account,
+            text(imported, "$.id"),
+            """
+            {"title": "Field notes", "selectedMarkIds": ["%s"]}
+            """
+                .formatted(markIds.get(2)));
+
+    assertThat(reviewed).hasStatusOk();
+    assertThat(JsonPath.<Integer>read(body(reviewed), "$.added")).isEqualTo(1);
+    assertThat(savesCount(account)).isEqualTo(1);
+    assertThat(
+            jdbc.queryForMap(
+                "SELECT s.kind, s.color, s.text, src.title FROM saves s"
+                    + " JOIN sources src ON src.id = s.source_id WHERE s.user_id = ?",
+                account.id()))
+        .containsEntry("kind", "IMPORT")
+        .containsEntry("color", "BLUE")
+        .containsEntry("text", "Scouts dance for the best site.")
+        .containsEntry("title", "Field notes");
+  }
+
+  @Test
+  void aPhotoWithoutMarksIsEmpty() {
+    Account account = signUp();
+
+    MvcTestResult imported =
+        photo(
+            account,
+            """
+            {"fileName": "plain.png", "contentType": "image/png", "sizeBytes": 10, "marks": []}
+            """);
+
+    assertThat(imported).hasStatus(HttpStatus.CREATED);
+    assertThat(text(imported, "$.status")).isEqualTo("EMPTY");
+    // Null fields are left out: an empty photo has no source.
+    assertThat(body(imported)).doesNotContain("sourceId");
+  }
+
+  @Test
+  void aPhotoNeedsAnImageType() {
+    Account account = signUp();
+
+    MvcTestResult refused =
+        photo(
+            account,
+            """
+            {"fileName": "notes.pdf", "contentType": "application/pdf", "sizeBytes": 10,
+             "marks": []}
+            """);
+
+    assertThat(refused).hasStatus(HttpStatus.BAD_REQUEST);
+    assertThat(text(refused, "$.code")).isEqualTo("VALIDATION_FAILED");
+  }
+
+  @Test
+  void aPhotoTakesItsSizeOfTheUploadSpace() {
+    Account account = signUp();
+
+    MvcTestResult refused =
+        photo(
+            account,
+            """
+            {"fileName": "huge.png", "contentType": "image/png", "sizeBytes": 52428801,
+             "marks": []}
+            """);
+
+    assertThat(refused).hasStatus(HttpStatus.CONTENT_TOO_LARGE);
+    assertThat(text(refused, "$.code")).isEqualTo("FILE_TOO_LARGE");
+  }
+
+  @Test
   void someoneElsesImportIsNotFound() {
     Account owner = signUp();
     Account other = signUp();
@@ -321,6 +428,15 @@ class ImportControllerTest {
         .multipart()
         .uri("/api/v1/imports")
         .file(new MockMultipartFile("file", name, "application/octet-stream", content))
+        .cookie(new Cookie(ACCESS, account.accessToken()))
+        .exchange();
+  }
+
+  private MvcTestResult photo(Account account, String json) {
+    return mvc.post()
+        .uri("/api/v1/imports/photo")
+        .contentType(MediaType.APPLICATION_JSON)
+        .content(json)
         .cookie(new Cookie(ACCESS, account.accessToken()))
         .exchange();
   }

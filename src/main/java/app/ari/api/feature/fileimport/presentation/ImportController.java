@@ -1,5 +1,6 @@
 package app.ari.api.feature.fileimport.presentation;
 
+import app.ari.api.feature.fileimport.application.model.request.PhotoImportRequest;
 import app.ari.api.feature.fileimport.application.model.request.ReviewRequest;
 import app.ari.api.feature.fileimport.application.model.response.ImportResponse;
 import app.ari.api.feature.fileimport.application.model.response.ImportsResponse;
@@ -28,8 +29,8 @@ import org.springframework.web.multipart.MultipartFile;
     name = "Imports",
     description =
         "PDF and Word files: uploaded, read in the background for their highlights, underlines,"
-            + " drawings, notes and comments, then reviewed into the Library. Everyone has 50 MB of"
-            + " upload space, in files of any size that fit.")
+            + " drawings, notes and comments, then reviewed into the Library; and photos, read in"
+            + " the browser. Everyone has 50 MB of upload space, in files of any size that fit.")
 @RequestMapping("/api/v1/imports")
 public interface ImportController {
 
@@ -61,6 +62,28 @@ public interface ImportController {
   ResponseEntity<ImportResponse> upload(
       @Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt,
       @RequestPart("file") MultipartFile file);
+
+  @Operation(
+      summary = "Import a photo's marks",
+      description =
+          "The browser reads the photo (OCR) and finds the words marked on it: highlighted,"
+              + " underlined, crossed out or drawn around with a pen. It sends them, not the photo."
+              + " The import is READY at once, each mark in its color (mapped to the five as a"
+              + " file's are) and ticked as a file's would be (a crossed-out one isn't), for the"
+              + " same review; EMPTY when none were found. The photo's size counts against the"
+              + " upload space.")
+  @ApiResponse(responseCode = "201", description = "The import, READY with its marks, or EMPTY")
+  @ApiResponse(
+      responseCode = "400",
+      description = "VALIDATION_FAILED, or NO_SPACE_LEFT (the upload space is too full)")
+  @ApiResponse(responseCode = "401", description = "UNAUTHORIZED")
+  @ApiResponse(
+      responseCode = "413",
+      description = "FILE_TOO_LARGE: over 50 MB, more than the whole upload space")
+  @PostMapping(path = "/photo", consumes = MediaType.APPLICATION_JSON_VALUE)
+  ResponseEntity<ImportResponse> importPhoto(
+      @Parameter(hidden = true) @AuthenticationPrincipal Jwt jwt,
+      @Valid @RequestBody PhotoImportRequest request);
 
   @Operation(
       summary = "One import",

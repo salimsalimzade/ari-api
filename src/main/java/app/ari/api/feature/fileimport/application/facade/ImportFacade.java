@@ -1,12 +1,13 @@
 package app.ari.api.feature.fileimport.application.facade;
 
+import app.ari.api.feature.fileimport.application.model.request.PhotoImportRequest;
 import app.ari.api.feature.fileimport.application.model.request.ReviewRequest;
 import app.ari.api.feature.fileimport.application.model.response.ImportResponse;
 import app.ari.api.feature.fileimport.application.model.response.ImportsResponse;
 import app.ari.api.feature.fileimport.application.model.response.ReviewResponse;
 import java.util.UUID;
 
-/** Importing PDF and Word files (docs/sequences.md section 5). */
+/** Importing PDF and Word files, and photos read in the browser (docs/sequences.md section 5). */
 public interface ImportFacade {
 
   /** The Imports page: the files that aren't dismissed, newest first, and the upload space. */
@@ -21,6 +22,13 @@ public interface ImportFacade {
    * NoSpaceLeftException}.
    */
   ImportResponse upload(UUID userId, String fileName, byte[] content);
+
+  /**
+   * Keeps the marks the browser found in a photo as an import READY to review, each in its mapped
+   * color from a new file source and ticked as a file's would be; EMPTY without any. Throws {@code
+   * ImportTooLargeException} or {@code NoSpaceLeftException} for the photo's size, as for a file.
+   */
+  ImportResponse importPhoto(UUID userId, PhotoImportRequest request);
 
   /**
    * Saves the ticked marks to the Library and removes the unticked ones that were saved; throws

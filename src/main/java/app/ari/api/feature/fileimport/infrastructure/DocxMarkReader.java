@@ -17,6 +17,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import org.apache.poi.ooxml.POIXMLProperties;
@@ -27,11 +28,13 @@ import org.w3c.dom.Element;
 import org.w3c.dom.Node;
 
 /**
- * Reads a Word document's highlighted (or color-shaded) and struck-through text, and its comments.
- * A comment on highlighted text becomes that highlight's comment; a comment on other text is a NOTE
- * with the commented words. Word has no pages in the file, but it notes where its last layout broke
- * them (and where page breaks were typed), which give the page numbers; a file without either has
- * none.
+ * Reads a Word document's highlighted (or color-shaded), struck-through and underlined text (links,
+ * underlined by their style, are left out), drawings made over it (ink from Word's Draw tab, or a
+ * shape without text, such as a circle), and its comments. A drawing is a DRAWN mark with the words
+ * of the paragraph it is anchored in, as Word keeps no tie to the words it covers. A comment on
+ * highlighted text becomes that highlight's comment; a comment on other text is a NOTE with the
+ * commented words. Word has no pages in the file, but it notes where its last layout broke them
+ * (and where page breaks were typed), which give the page numbers; a file without either has none.
  */
 @Component
 public class DocxMarkReader implements MarkReader {
@@ -52,15 +55,18 @@ public class DocxMarkReader implements MarkReader {
           Map.entry("red", new MappedColor(MarkColor.PINK, FileColor.RED)),
           Map.entry("darkRed", new MappedColor(MarkColor.PINK, FileColor.RED)));
 
-  // Elements whose children are read in order; anything else (properties, drawings, the deleted
-  // text of tracked changes) is skipped.
+  // Older (VML) drawing shapes that can mark text; a "shape" with a picture in it is left out.
+  private static final Set<String> DRAWN_VML =
+      Set.of("oval", "line", "polyline", "arc", "curve", "rect", "roundrect");
+
+  // Elements whose children are read in order (links too, apart); anything else (properties,
+  // drawings, the deleted text of tracked changes) is skipped.
   private static final Set<String> CONTAINERS =
       Set.of(
           "body",
           "tbl",
           "tr",
           "tc",
-          "hyperlink",
           "ins",
           "moveTo",
           "smartTag",
@@ -80,7 +86,9 @@ public class DocxMarkReader implements MarkReader {
   public FoundFile read(byte[] content) {
     try (XWPFDocument document = new XWPFDocument(new ByteArrayInputStream(content))) {
       Map<String, String> comments = new HashMap<>();
-      for (XWPFComment comment : document.getComments()) {
+      // POI gives null, not an empty array, for a document without comments.
+      XWPFComment[] all = document.getComments();
+      for (XWPFComment comment : all == null ? new XWPFComment[0] : all) {
         String text = PdfMarkReader.clean(comment.getText());
         if (text != null) {
           comments.put(comment.getId(), text);
@@ -110,6 +118,13 @@ public class DocxMarkReader implements MarkReader {
     private int offset;
     // The mark being made from the runs of one paragraph.
     private Run current;
+    // The paragraph being read: where it started, its words, and whether something is drawn on it.
+    private int paragraphStart;
+    private int paragraphPage;
+    private final StringBuilder paragraphText = new StringBuilder();
+    private boolean drawn;
+    // Inside a link, whose underline is its look, not a mark.
+    private int links;
 
     Walker(Map<String, String> comments) {
       this.comments = comments;
@@ -126,10 +141,20 @@ public class DocxMarkReader implements MarkReader {
     private void visit(Element element) {
       switch (element.getLocalName()) {
         case "p" -> {
+          paragraphStart = offset;
+          paragraphPage = page;
+          paragraphText.setLength(0);
+          drawn = false;
           children(element);
           endMark();
+          endDrawing();
           // Words in two paragraphs are never one mark, and a space keeps comments readable.
           addText(" ", null);
+        }
+        case "hyperlink" -> {
+          links++;
+          children(element);
+          links--;
         }
         case "r" -> run(element);
         case "commentRangeStart" -> open.put(idOf(element), new Range(offset));
@@ -145,6 +170,7 @@ public class DocxMarkReader implements MarkReader {
     private void run(Element run) {
       MappedColor highlight = null;
       boolean strike = false;
+      MappedColor underline = null;
       StringBuilder text = new StringBuilder();
       for (Node child = run.getFirstChild(); child != null; child = child.getNextSibling()) {
         if (!(child instanceof Element element)) {
@@ -154,6 +180,12 @@ public class DocxMarkReader implements MarkReader {
           case "rPr" -> {
             highlight = highlightOf(element);
             strike = isOn(first(element, "strike")) || isOn(first(element, "dstrike"));
+            underline = links > 0 || isLink(element) ? null : underlineOf(element);
+          }
+          case "drawing", "pict", "AlternateContent", "contentPart" -> {
+            if (isDrawnMark(element)) {
+              drawn = true;
+            }
           }
           case "t" -> text.append(textOf(element));
           case "tab", "cr" -> text.append(' ');
@@ -173,8 +205,14 @@ public class DocxMarkReader implements MarkReader {
       if (chunk.isEmpty()) {
         return;
       }
-      MarkType type = highlight != null ? MarkType.HIGHLIGHT : strike ? MarkType.STRIKE : null;
-      MappedColor color = highlight == null ? MappedColor.DEFAULT : highlight;
+      MarkType type =
+          highlight != null
+              ? MarkType.HIGHLIGHT
+              : strike ? MarkType.STRIKE : underline != null ? MarkType.UNDERLINE : null;
+      MappedColor color =
+          highlight != null
+              ? highlight
+              : type == MarkType.UNDERLINE ? underline : MappedColor.DEFAULT;
       if (type == null) {
         endMark();
         addText(chunk, null);
@@ -202,6 +240,7 @@ public class DocxMarkReader implements MarkReader {
       if (into != null) {
         into.text.append(text);
       }
+      paragraphText.append(text);
       for (Range range : open.values()) {
         range.text.append(text);
       }
@@ -222,6 +261,20 @@ public class DocxMarkReader implements MarkReader {
                 new FoundMark(current.type, current.color, text, null, null, null)));
       }
       current = null;
+    }
+
+    /** A drawing on the paragraph just read marks its words; one on an empty paragraph, none. */
+    private void endDrawing() {
+      String text = PdfMarkReader.clean(paragraphText.toString());
+      if (drawn && text != null) {
+        marks.add(
+            new Placed(
+                paragraphStart,
+                offset,
+                paragraphPage,
+                new FoundMark(MarkType.DRAWN, MappedColor.DEFAULT, text, null, null, null)));
+      }
+      drawn = false;
     }
 
     private void closeComment(String id) {
@@ -292,6 +345,60 @@ public class DocxMarkReader implements MarkReader {
     Element shading = first(properties, "shd");
     String fill = shading == null ? null : attribute(shading, "fill");
     return MappedColor.hasHue(fill) ? MappedColor.ofHex(fill) : null;
+  }
+
+  /** A run's underline in its color (black and auto read as yellow); null for none. */
+  private static MappedColor underlineOf(Element properties) {
+    Element underline = first(properties, "u");
+    String kind = underline == null ? null : attribute(underline, "val");
+    if (underline == null || "none".equals(kind)) {
+      return null;
+    }
+    return MappedColor.ofHex(attribute(underline, "color"));
+  }
+
+  /** Whether the run has a link's character style, as a typed address gets. */
+  private static boolean isLink(Element properties) {
+    Element style = first(properties, "rStyle");
+    String name = style == null ? null : attribute(style, "val");
+    return name != null && name.toLowerCase(Locale.ROOT).contains("hyperlink");
+  }
+
+  /**
+   * Whether a run's drawing is a mark made on the text: ink (Word's Draw tab keeps it as a content
+   * part) or a shape without text, such as a circle or a line. Pictures, charts and text boxes are
+   * the document's own content.
+   */
+  private static boolean isDrawnMark(Element element) {
+    String name = element.getLocalName();
+    if (name.equals("contentPart")) {
+      return true;
+    }
+    if (name.equals("pic") || name.equals("chart") || name.equals("imagedata")) {
+      return false;
+    }
+    if (name.equals("wsp") || DRAWN_VML.contains(name)) {
+      return !contains(element, "txbx") && !contains(element, "textbox");
+    }
+    for (Node child = element.getFirstChild(); child != null; child = child.getNextSibling()) {
+      // An alternate's fallback repeats its choice, in older markup: the choice tells.
+      if (child instanceof Element inner && !inner.getLocalName().equals("Fallback")) {
+        if (isDrawnMark(inner)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private static boolean contains(Element parent, String localName) {
+    for (Node child = parent.getFirstChild(); child != null; child = child.getNextSibling()) {
+      if (child instanceof Element element
+          && (localName.equals(element.getLocalName()) || contains(element, localName))) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /** A toggle like {@code <w:strike/>}: on unless its value says off. */

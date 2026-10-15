@@ -20,10 +20,14 @@ import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationText;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationTextMarkup;
 import org.apache.pdfbox.pdmodel.interactive.annotation.PDAnnotationUnderline;
 import org.apache.poi.xwpf.usermodel.BreakType;
+import org.apache.poi.xwpf.usermodel.UnderlinePatterns;
 import org.apache.poi.xwpf.usermodel.XWPFComment;
 import org.apache.poi.xwpf.usermodel.XWPFDocument;
+import org.apache.poi.xwpf.usermodel.XWPFHyperlinkRun;
 import org.apache.poi.xwpf.usermodel.XWPFParagraph;
 import org.apache.poi.xwpf.usermodel.XWPFRun;
+import org.apache.xmlbeans.XmlException;
+import org.openxmlformats.schemas.wordprocessingml.x2006.main.CTR;
 
 /** Files with marks, made the way PDF readers and Word make them, for the import tests. */
 public final class ImportFiles {
@@ -136,6 +140,92 @@ public final class ImportFiles {
       return out.toByteArray();
     } catch (IOException e) {
       throw new UncheckedIOException(e);
+    }
+  }
+
+  /**
+   * An underline in red, and two underlined links (one by its style, one a link element), which
+   * aren't marks; then a paragraph with ink drawn on it, one with a circle, and one with a text
+   * box, which is the document's own content.
+   */
+  public static byte[] drawnDocx() {
+    try (XWPFDocument document = new XWPFDocument()) {
+      XWPFParagraph first = document.createParagraph();
+      first.createRun().setText("Scouts ");
+      XWPFRun underlined = first.createRun();
+      underlined.setText("dance for the best site");
+      underlined.setUnderline(UnderlinePatterns.SINGLE);
+      underlined.setUnderlineColor("C00000");
+      first.createRun().setText(". See ");
+      XWPFRun styled = first.createRun();
+      styled.setText("example.org");
+      styled.setUnderline(UnderlinePatterns.SINGLE);
+      styled.setStyle("Hyperlink");
+      first.createRun().setText(" and ");
+      XWPFHyperlinkRun link = first.createHyperlinkRun("https://example.org/study");
+      link.setText("the study");
+      link.setUnderline(UnderlinePatterns.SINGLE);
+
+      XWPFParagraph inked = document.createParagraph();
+      inked.createRun().setText("The queen leaves with half the colony.");
+      drawing(
+          inked,
+          """
+          <mc:AlternateContent>
+            <mc:Choice Requires="wpi">
+              <w14:contentPart r:id="rId90"><w14:xfrm/></w14:contentPart>
+            </mc:Choice>
+            <mc:Fallback><w:pict/></mc:Fallback>
+          </mc:AlternateContent>
+          """);
+
+      XWPFParagraph circled = document.createParagraph();
+      circled.createRun().setText("Swarms rest on a branch.");
+      drawing(circled, shape("<a:prstGeom prst=\"ellipse\"/>", ""));
+
+      XWPFParagraph boxed = document.createParagraph();
+      boxed.createRun().setText("A caption beside a figure.");
+      drawing(boxed, shape("", "<wps:txbx><w:txbxContent><w:p/></w:txbxContent></wps:txbx>"));
+
+      ByteArrayOutputStream out = new ByteArrayOutputStream();
+      document.write(out);
+      return out.toByteArray();
+    } catch (IOException e) {
+      throw new UncheckedIOException(e);
+    }
+  }
+
+  private static String shape(String geometry, String content) {
+    return """
+        <w:drawing><wp:inline><a:graphic>
+          <a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+            <wps:wsp><wps:spPr>%s</wps:spPr>%s<wps:bodyPr/></wps:wsp>
+          </a:graphicData>
+        </a:graphic></wp:inline></w:drawing>
+        """
+        .formatted(geometry, content);
+  }
+
+  /**
+   * Adds a run holding drawing markup, the way Word writes it; xml-fragment is XmlBeans' wrapper.
+   */
+  private static void drawing(XWPFParagraph paragraph, String markup) {
+    String run =
+        """
+        <xml-fragment xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+            xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+            xmlns:w14="http://schemas.microsoft.com/office/word/2010/wordml"
+            xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+            xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+            xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+            xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">%s
+        </xml-fragment>
+        """
+            .formatted(markup);
+    try {
+      paragraph.getCTP().addNewR().set(CTR.Factory.parse(run));
+    } catch (XmlException e) {
+      throw new IllegalStateException(e);
     }
   }
 

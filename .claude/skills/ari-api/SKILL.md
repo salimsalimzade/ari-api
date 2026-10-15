@@ -267,6 +267,7 @@ enum FileColor { ORANGE, RED } // a file's own color that had to be mapped
 | `DELETE /notes/{id}` | `note` | 204; the saves it quotes stay; 404 `NOT_FOUND` |
 | `GET /imports` | `fileimport` | `ImportsResponse`: the files not dismissed, newest first (200 at most), and the upload space; the website polls it every 2 s while one is `QUEUED` or `READING` |
 | `POST /imports` (multipart `file`) | `fileimport` | 202 + `ImportResponse` (`QUEUED`): a PDF or DOCX by its bytes, of any size that fits in the space left (everyone has 50 MB until billing; the servlet takes up to 50 MB), stored in MinIO and queued through the outbox; 400 `UNSUPPORTED_FILE`, `NO_SPACE_LEFT`; 413 `FILE_TOO_LARGE` over 50 MB |
+| `POST /imports/photo` `{ fileName, contentType, sizeBytes, marks: [{ type, text, color }] }` | `fileimport` | 201 + `ImportResponse`: a photo the browser read (F12). Nothing is stored but the marks it found, each `HIGHLIGHT`, `UNDERLINE`, `STRIKE` or `DRAWN` in its color (`#RRGGBB`, mapped like a file's; black or left out is yellow) and ticked as a file's would be; `READY` with a new file source named after the photo, or `EMPTY` without marks. `contentType` `image/jpeg`, `image/png` or `image/webp`, at most 500 marks of up to 10000 characters; `sizeBytes` counts against the upload space like a file's. 400 `VALIDATION_FAILED`, `NO_SPACE_LEFT`; 413 `FILE_TOO_LARGE` over 50 MB |
 | `GET /imports/{id}` | `fileimport` | `ImportResponse`, with its marks once `READY` or `SAVED`; 404 `NOT_FOUND` |
 | `PUT /imports/{id}/review` `{ title, author, tag, color, selectedMarkIds }` | `fileimport` | 200 + `ReviewResponse`: ticked marks without a save become saves (`IMPORT`, or an image clip for a handwritten mark's picture) through `SaveFacade.createImported`; saved ones unticked are deleted; the source takes the title and author; `SAVED`. 409 `INVALID_IMPORT_STATE` |
 | `POST /imports/{id}/retry` | `fileimport` | 202, a `FAILED` file back to `QUEUED`; 409 otherwise |
@@ -489,7 +490,7 @@ Do these in order, one at a time:
    releases. Private bucket, created at startup when missing; signed links for images; keys in
    `docs/database.md` section 5. Profile photos use it already. Flow: upload to MinIO → outbox → RabbitMQ
    `import.process` → the import consumer in `ari-api` → PDFBox reads PDF highlight annotations
-   with page numbers, POI reads DOCX highlights and comments → delete the file. Image OCR happens
+   with page numbers, POI reads DOCX highlights, strike-throughs, underlines (not links), drawings (ink and shapes without text, a DRAWN mark over their paragraph) and comments → delete the file. Image OCR happens
    in the browser (frontend repo). EPUB is not supported.
 5. **Async jobs and retries (done for email and `import.process`):** a transactional outbox
    in `feature/outbox`. Write the outbox row in the same transaction as the business change

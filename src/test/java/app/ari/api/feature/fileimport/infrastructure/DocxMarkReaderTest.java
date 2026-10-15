@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import app.ari.api.feature.fileimport.ImportFiles;
+import app.ari.api.feature.fileimport.domain.model.FileColor;
 import app.ari.api.feature.fileimport.domain.model.FileReadException;
 import app.ari.api.feature.fileimport.domain.model.FoundFile;
 import app.ari.api.feature.fileimport.domain.model.FoundMark;
@@ -37,6 +38,23 @@ class DocxMarkReaderTest {
     assertThat(marks.get(0).color().color()).isEqualTo(MarkColor.YELLOW);
     assertThat(marks.get(2).color().color()).isEqualTo(MarkColor.PINK);
     assertThat(marks.get(3).comment()).isEqualTo("Compare with the 2019 study");
+  }
+
+  @Test
+  void readsUnderlinesButNotLinksAndDrawingsOverParagraphs() {
+    List<FoundMark> marks = reader.read(ImportFiles.drawnDocx()).marks();
+
+    assertThat(marks)
+        .extracting(FoundMark::type)
+        .containsExactly(MarkType.UNDERLINE, MarkType.DRAWN, MarkType.DRAWN);
+    assertThat(marks)
+        .extracting(FoundMark::text)
+        .containsExactly(
+            "dance for the best site",
+            "The queen leaves with half the colony.",
+            "Swarms rest on a branch.");
+    assertThat(marks.get(0).color().color()).isEqualTo(MarkColor.PINK);
+    assertThat(marks.get(0).color().fileColor()).isEqualTo(FileColor.RED);
   }
 
   @Test

@@ -1,6 +1,7 @@
 package app.ari.api.feature.fileimport.presentation.impl;
 
 import app.ari.api.feature.fileimport.application.facade.ImportFacade;
+import app.ari.api.feature.fileimport.application.model.request.PhotoImportRequest;
 import app.ari.api.feature.fileimport.application.model.request.ReviewRequest;
 import app.ari.api.feature.fileimport.application.model.response.ImportResponse;
 import app.ari.api.feature.fileimport.application.model.response.ImportsResponse;
@@ -38,6 +39,11 @@ public class ImportControllerImpl implements ImportController {
     } catch (IOException e) {
       throw new UncheckedIOException("Could not read the uploaded file", e);
     }
+  }
+
+  @Override
+  public ResponseEntity<ImportResponse> importPhoto(Jwt jwt, @Valid PhotoImportRequest request) {
+    return ResponseEntity.status(HttpStatus.CREATED).body(facade.importPhoto(userId(jwt), request));
   }
 
   @Override

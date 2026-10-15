@@ -268,10 +268,16 @@ sequenceDiagram
   object belongs to exactly one row. Pictures are PNG: Java's ImageIO writes no WebP.
 - Readers: PDFBox takes highlights, underlines (and squiggles), strike-outs, sticky and typed notes,
   and drawings (ink, boxes, circles, polygons) with the page's text under them; a drawing over no
-  text is `HANDWRITTEN`. POI takes Word's highlights (and colored shading), strike-throughs and
-  comments; a comment on a highlight becomes its comment, on other text a `NOTE`. Word files give
+  text is `HANDWRITTEN`. POI takes Word's highlights (and colored shading), strike-throughs,
+  underlines (a link's, by its style or a link element, isn't one), drawings (Draw-tab ink, or a
+  shape without text such as a circle: a `DRAWN` mark with the words of the paragraph it is
+  anchored in, as Word keeps no tie to the words under it) and comments; a comment on a highlight becomes its comment, on other text a `NOTE`. Word files give
   page numbers only where Word noted its page breaks.
-- Photos are not read here: OCR runs in the browser (F12).
+- Photos are not read here: OCR runs in the browser (F12), which finds the highlighted,
+  underlined, crossed-out and drawn-around words and sends only those to `POST /imports/photo`,
+  each with its type and color. That import is written `READING` and finished at once, in one
+  transaction, with a mark per one (colors mapped like a file's) and a new file source: `READY` for
+  the same review, or `EMPTY` without marks, with nothing in storage and nothing queued.
 
 ## 6. Save from the extension (F13)
 

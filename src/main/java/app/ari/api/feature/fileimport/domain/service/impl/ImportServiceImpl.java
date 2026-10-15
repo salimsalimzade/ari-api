@@ -99,6 +99,32 @@ public class ImportServiceImpl implements ImportService {
   }
 
   @Override
+  public FileImport createRead(UUID userId, String fileName, String contentType, long sizeBytes) {
+    Instant now = now();
+    FileImport created =
+        new FileImport(
+            UUID.randomUUID(),
+            userId,
+            null,
+            fileName,
+            contentType,
+            sizeBytes,
+            null,
+            ImportStatus.READING,
+            1,
+            null,
+            null,
+            null,
+            null,
+            now,
+            now,
+            0,
+            0);
+    imports.insert(created);
+    return created;
+  }
+
+  @Override
   public Optional<FileImport> find(UUID userId, UUID id) {
     return imports.findById(userId, id);
   }
@@ -172,6 +198,7 @@ public class ImportServiceImpl implements ImportService {
         now);
     deleteFileAfterCommit(fileImport);
   }
+
   @Override
   public void fail(UUID id, ReadFailure failure) {
     imports.fail(id, failure.name(), now());
