@@ -39,9 +39,9 @@ sequenceDiagram
     A-->>B: 200 available true or false
   end
   alt Register
-    B->>A: POST /api/v1/auth/register (username, password, fullName, birthDate)
+    B->>A: POST /api/v1/auth/register (username, password, fullName)
     A->>D: SELECT 1 FROM users WHERE username = 'bee.reader' (a row is 409 USERNAME_TAKEN)
-    A->>S: POST /auth/v1/admin/users (new id, <id>@no-email.ari.invalid, password, confirmed, metadata username, full_name, birth_date)
+    A->>S: POST /auth/v1/admin/users (new id, <id>@no-email.ari.invalid, password, confirmed, metadata username, full_name)
     S->>D: INSERT auth.users, the trigger INSERTs users (a taken username fails it: 409)
     A->>R: BF.ADD usernames bee.reader
   else Sign in
@@ -135,7 +135,7 @@ sequenceDiagram
   S-->>A: access and refresh tokens
   A-->>B: 302 to /welcome (needs_username) or /library + Set-Cookie ari_access, ari_refresh; ari_google cleared
   Note over B,A: Anything failed (cancelled, no code, another browser's verifier): 302 to /login?error=google.
-  B->>A: On /welcome: PUT /api/v1/me (username, fullName, birthDate) clears needs_username
+  B->>A: On /welcome: PUT /api/v1/me (username, fullName, birthDate or null) clears needs_username
 ```
 
 - The verifier stays in an httpOnly cookie that only `/api/v1/auth/google` receives, so only the
@@ -523,7 +523,7 @@ sequenceDiagram
   participant A as ari-api
   participant S as MinIO
   participant D as PostgreSQL
-  B->>A: PUT /api/v1/me (username, fullName, birthDate)
+  B->>A: PUT /api/v1/me (username, fullName, birthDate or null)
   A->>D: Another account has the username, in any case? Yes is 409 USERNAME_TAKEN
   A->>D: UPDATE users SET username, full_name, birth_date (the unique key decides a race)
   A-->>B: 200 Me

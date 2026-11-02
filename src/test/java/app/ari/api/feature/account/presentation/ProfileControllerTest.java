@@ -14,7 +14,7 @@ import org.springframework.http.MediaType;
 import org.springframework.test.web.servlet.assertj.MockMvcTester;
 import org.springframework.test.web.servlet.assertj.MvcTestResult;
 
-/** Changing the full name, username and date of birth. */
+/** Changing the full name, username and the optional date of birth. */
 @IntegrationTest
 class ProfileControllerTest {
 
@@ -78,6 +78,22 @@ class ProfileControllerTest {
   }
 
   @Test
+  void theBirthDateIsOptionalAndNullRemovesIt() {
+    String username = newUsername();
+    String accessToken = signUp(username);
+
+    assertThat(updateProfile(accessToken, username, "Test User", "1990-05-17"))
+        .hasStatusOk()
+        .bodyJson()
+        .extractingPath("$.birthDate")
+        .isEqualTo("1990-05-17");
+    assertThat(updateProfile(accessToken, username, "Test User", null))
+        .hasStatusOk()
+        .bodyJson()
+        .doesNotHavePath("$.birthDate");
+  }
+
+  @Test
   void needsASignedInUser() {
     assertThat(
             mvc.put()
@@ -98,11 +114,12 @@ class ProfileControllerTest {
         .exchange();
   }
 
+  /** A null birth date goes as JSON null. */
   private static String profileJson(String username, String fullName, String birthDate) {
     return """
-        {"username": "%s", "fullName": "%s", "birthDate": "%s"}
+        {"username": "%s", "fullName": "%s", "birthDate": %s}
         """
-        .formatted(username, fullName, birthDate);
+        .formatted(username, fullName, birthDate == null ? "null" : "\"" + birthDate + "\"");
   }
 
   private String signUp(String username) {
@@ -112,8 +129,7 @@ class ProfileControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"username": "%s", "password": "correct horse", "fullName": "Test User",
-                 "birthDate": "1990-05-17"}
+                {"username": "%s", "password": "correct horse", "fullName": "Test User"}
                 """
                     .formatted(username))
             .exchange();

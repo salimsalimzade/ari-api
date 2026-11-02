@@ -10,16 +10,16 @@ import java.util.UUID;
 public interface AccountService {
 
   /**
-   * Creates a password user with no plan and no email yet: a Supabase user with a placeholder
-   * email, whose profile the database trigger fills in from its metadata.
+   * Creates a password user with no plan, no email and no birth date yet: a Supabase user with a
+   * placeholder email, whose profile the database trigger fills in from its metadata.
    */
-  Registration register(String username, String password, String fullName, LocalDate birthDate);
+  Registration register(String username, String password, String fullName);
 
   Optional<User> findById(UUID id);
 
   /**
-   * Changes the full name, username and date of birth; empty when another account has the username
-   * (in any case).
+   * Changes the full name, username and date of birth (null removes it); empty when another account
+   * has the username (in any case).
    */
   Optional<User> updateProfile(UUID id, String username, String fullName, LocalDate birthDate);
 

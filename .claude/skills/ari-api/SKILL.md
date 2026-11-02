@@ -233,7 +233,7 @@ enum FileColor { ORANGE, RED } // a file's own color that had to be mapped
 
 | Endpoint | Feature | Behavior |
 |---|---|---|
-| `POST /auth/register` `{ username, password, fullName, birthDate }` | `account` | 201 + `MeResponse` + both cookies: a Supabase user (placeholder email) made through the admin API, its profile by the trigger; 409 `USERNAME_TAKEN`; 400 `WEAK_PASSWORD` |
+| `POST /auth/register` `{ username, password, fullName }` | `account` | 201 + `MeResponse` + both cookies: a Supabase user (placeholder email) made through the admin API, its profile by the trigger; 409 `USERNAME_TAKEN`; 400 `WEAK_PASSWORD` |
 | `POST /auth/login` `{ username, password }` | `account` | 200 + `MeResponse` + both cookies (Supabase's password grant with the user's sign-in email); 401 `INVALID_CREDENTIALS`; 429 `RATE_LIMITED` |
 | `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies (Supabase's refresh grant); 401 clears them |
 | `POST /auth/logout` (`ari_access`, `ari_refresh` cookies) | `account` | 204, signs the session out at Supabase and clears the cookies |
@@ -245,7 +245,7 @@ enum FileColor { ORANGE, RED } // a file's own color that had to be mapped
 | `POST /auth/extension/refresh` `{ refreshToken }` | `account` | 200 new pair (Supabase's refresh); 401 `UNAUTHORIZED`, clearing no cookies |
 | `POST /auth/extension/logout` `{ refreshToken }` | `account` | 204, ends the extension's session; the website's stays |
 | `GET /me` | `account` | The signed-in user (plan `NONE` until the trial starts, `savesCount` for the sidebar, `email` verified and `pendingEmail` waiting); 401 when signed out |
-| `PUT /me` `{ username, fullName, birthDate }` | `account` | 200 + `MeResponse`; the sign-up rules; 409 `USERNAME_TAKEN` in any case |
+| `PUT /me` `{ username, fullName, birthDate? }` | `account` | 200 + `MeResponse`; the sign-up rules, and an optional past birth date (null removes it); 409 `USERNAME_TAKEN` in any case |
 | `PUT /me/photo` (multipart `photo`) | `account` | 200 + `MeResponse` with `photoUrl` (signed, an hour); JPEG, PNG or WebP by its bytes, at most 2 MB: 400 `INVALID_PHOTO`, 413 `FILE_TOO_LARGE`; the old photo is deleted |
 | `DELETE /me/photo` | `account` | 204, deletes the photo |
 | `PUT /me/email` `{ email }` | `account` | 202 + `MeResponse`, `pendingEmail` set and its verify link queued (200, nothing sent, when it already is the verified email); 429 `RATE_LIMITED` over 1 a minute or 5 a day |

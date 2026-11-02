@@ -42,7 +42,7 @@ erDiagram
     uuid id PK
     varchar email UK "sign-in email: the verified one, or <id>@no-email.ari.invalid"
     varchar encrypted_password "bcrypt, null for Google-only users"
-    jsonb raw_user_meta_data "username, full_name, birth_date from ari-api; name from Google"
+    jsonb raw_user_meta_data "username, full_name from ari-api; name from Google"
     jsonb raw_app_meta_data "provider: email or google"
   }
   subscriptions {

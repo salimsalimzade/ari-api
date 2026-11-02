@@ -29,18 +29,13 @@ public class AccountServiceImpl implements AccountService {
   }
 
   @Override
-  public Registration register(
-      String username, String password, String fullName, LocalDate birthDate) {
+  public Registration register(String username, String password, String fullName) {
     String normalized = Usernames.normalize(username);
     if (users.usernameExists(normalized)) {
       return new Registration(Registration.Status.USERNAME_TAKEN, null);
     }
     UUID id = UUID.randomUUID();
-    Map<String, String> profile =
-        Map.of(
-            "username", normalized,
-            "full_name", fullName.strip(),
-            "birth_date", birthDate.toString());
+    Map<String, String> profile = Map.of("username", normalized, "full_name", fullName.strip());
     return switch (identity.createUser(id, NoEmail.of(id), password, profile)) {
       // The trigger made the profile in Supabase's transaction, which has committed.
       case DONE ->

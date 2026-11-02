@@ -310,7 +310,9 @@ public interface AccountController {
 
   @Operation(
       summary = "Change the full name, username and date of birth",
-      description = "Also confirms a Google user's username: needsUsername becomes false.")
+      description =
+          "The date of birth is optional: null or left out removes it. Also confirms a Google"
+              + " user's username: needsUsername becomes false.")
   @ApiResponse(responseCode = "200", description = "The updated user")
   @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
   @ApiResponse(responseCode = "401", description = "UNAUTHORIZED")

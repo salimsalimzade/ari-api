@@ -307,8 +307,7 @@ class SourceControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"username": "%s", "password": "correct horse", "fullName": "Test User",
-                 "birthDate": "1990-05-17"}
+                {"username": "%s", "password": "correct horse", "fullName": "Test User"}
                 """
                     .formatted(username))
             .exchange();

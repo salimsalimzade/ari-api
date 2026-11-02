@@ -90,7 +90,7 @@ sequenceDiagram
     A-->>B: 200 available true or false
   end
   alt Register
-    B->>A: POST /api/v1/auth/register (username, password, fullName, birthDate)
+    B->>A: POST /api/v1/auth/register (username, password, fullName)
     A->>D: Normalize username, hash password, INSERT users ON CONFLICT DO NOTHING (no row is 409 USERNAME_TAKEN)
     A->>R: BF.ADD usernames bee.reader, after the commit
   else Sign in
@@ -376,7 +376,7 @@ sequenceDiagram
   participant A as ari-api
   participant S as MinIO
   participant D as PostgreSQL
-  B->>A: PUT /api/v1/me (username, fullName, birthDate)
+  B->>A: PUT /api/v1/me (username, fullName, birthDate or null)
   A->>D: Another account has the username, in any case? Yes is 409 USERNAME_TAKEN
   A->>D: UPDATE users SET username, full_name, birth_date (the unique key decides a race)
   A-->>B: 200 Me
@@ -436,7 +436,7 @@ erDiagram
     uuid id PK
     varchar email UK "sign-in email: the verified one, or <id>@no-email.ari.invalid"
     varchar encrypted_password "bcrypt, null for Google-only users"
-    jsonb raw_user_meta_data "username, full_name, birth_date from ari-api; name from Google"
+    jsonb raw_user_meta_data "username, full_name from ari-api; name from Google"
     jsonb raw_app_meta_data "provider: email or google"
   }
   subscriptions {

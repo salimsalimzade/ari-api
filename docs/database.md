@@ -62,7 +62,7 @@ erDiagram
     uuid id PK
     varchar email UK "sign-in email: the verified one, or <id>@no-email.ari.invalid"
     varchar encrypted_password "bcrypt, null for Google-only users"
-    jsonb raw_user_meta_data "username, full_name, birth_date from ari-api; name from Google"
+    jsonb raw_user_meta_data "username, full_name from ari-api; name from Google"
     jsonb raw_app_meta_data "provider: email or google"
   }
   users {
@@ -113,7 +113,7 @@ erDiagram
   refresh tokens and identities, are Supabase's own). Supabase writes it; `ari-api` changes it only
   through Supabase's admin API, never with SQL.
 - Every new `auth.users` row gets its `users` row from the `ari_create_profile` trigger (changeset
-  012), in Supabase's own transaction: a password user's username, name and birth date come from
+  012), in Supabase's own transaction: a password user's username and name come from
   the metadata `ari-api` sent; a Google user's email (unless another account verified it) and
   name come from Google, with a username made from the email and `needs_username` set.
 - Supabase's Data API (PostgREST) serves the `public` schema to anyone with the project's keys, so

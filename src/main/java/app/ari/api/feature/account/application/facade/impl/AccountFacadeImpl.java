@@ -118,8 +118,7 @@ public class AccountFacadeImpl implements AccountFacade {
   @Override
   public SignedIn register(RegisterRequest request) {
     Registration registration =
-        accountService.register(
-            request.username(), request.password(), request.fullName(), request.birthDate());
+        accountService.register(request.username(), request.password(), request.fullName());
     User user =
         switch (registration.status()) {
           case CREATED -> registration.user();

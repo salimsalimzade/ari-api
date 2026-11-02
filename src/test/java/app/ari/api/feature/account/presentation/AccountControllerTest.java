@@ -68,8 +68,7 @@ class AccountControllerTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"username": "a b", "password": "short",
-                 "fullName": "", "birthDate": "2999-01-01"}
+                {"username": "a b", "password": "short", "fullName": ""}
                 """)
             .exchange();
 
@@ -79,24 +78,15 @@ class AccountControllerTest {
         .bodyJson()
         .extractingPath("$.errors[*].field")
         .asArray()
-        .contains("username", "password", "fullName", "birthDate");
+        .contains("username", "password", "fullName");
   }
 
   @Test
-  void registerRequiresABirthDate() {
-    MvcTestResult result =
-        mvc.post()
-            .uri("/api/v1/auth/register")
-            .contentType(MediaType.APPLICATION_JSON)
-            .content(
-                """
-                {"username": "%s", "password": "%s", "fullName": "Test User"}
-                """
-                    .formatted(newUsername(), PASSWORD))
-            .exchange();
+  void registerAsksForNoBirthDate() {
+    MvcTestResult result = register(newUsername(), PASSWORD);
 
-    assertThat(result).hasStatus(HttpStatus.BAD_REQUEST);
-    assertThat(result).bodyJson().extractingPath("$.errors[0].field").isEqualTo("birthDate");
+    assertThat(result).hasStatus(HttpStatus.CREATED);
+    assertThat(result).bodyJson().doesNotHavePath("$.birthDate");
   }
 
   @Test
@@ -111,7 +101,6 @@ class AccountControllerTest {
         .extractingPath("$.username")
         .isEqualTo(username.toLowerCase(Locale.ROOT));
     assertThat(result).bodyJson().extractingPath("$.fullName").isEqualTo("Test User");
-    assertThat(result).bodyJson().extractingPath("$.birthDate").isEqualTo("1990-05-17");
   }
 
   @Test
@@ -310,8 +299,7 @@ class AccountControllerTest {
         .contentType(MediaType.APPLICATION_JSON)
         .content(
             """
-            {"username": "%s", "password": "%s", "fullName": "Test User",
-             "birthDate": "1990-05-17"}
+            {"username": "%s", "password": "%s", "fullName": "Test User"}
             """
                 .formatted(username, password))
         .exchange();

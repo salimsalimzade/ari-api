@@ -208,8 +208,7 @@ class PasswordResetTest {
             .contentType(MediaType.APPLICATION_JSON)
             .content(
                 """
-                {"username": "%s", "password": "%s", "fullName": "Test User",
-                 "birthDate": "1990-05-17"}
+                {"username": "%s", "password": "%s", "fullName": "Test User"}
                 """
                     .formatted(username, PASSWORD))
             .exchange();
