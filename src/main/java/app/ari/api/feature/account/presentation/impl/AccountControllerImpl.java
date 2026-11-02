@@ -14,6 +14,8 @@ import app.ari.api.feature.account.application.model.request.RegisterRequest;
 import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
 import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
 import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
+import app.ari.api.feature.account.application.model.response.GoogleSignInResult;
+import app.ari.api.feature.account.application.model.response.GoogleSignInStart;
 import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.PasswordResetCheckResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
@@ -25,6 +27,7 @@ import jakarta.validation.Valid;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.util.UUID;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
 import org.springframework.http.ResponseEntity;
@@ -69,9 +72,30 @@ public class AccountControllerImpl implements AccountController {
   }
 
   @Override
-  public ResponseEntity<Void> logout(String refreshToken) {
-    facade.logout(refreshToken);
+  public ResponseEntity<Void> logout(String accessToken, String refreshToken) {
+    facade.logout(accessToken, refreshToken);
     return ResponseEntity.noContent().headers(cookies.clear()).build();
+  }
+
+  @Override
+  public ResponseEntity<Void> googleSignIn() {
+    GoogleSignInStart start = facade.startGoogleSignIn();
+    return ResponseEntity.status(HttpStatus.FOUND)
+        .location(start.location())
+        .header(HttpHeaders.SET_COOKIE, cookies.googleVerifier(start.codeVerifier()))
+        .build();
+  }
+
+  @Override
+  public ResponseEntity<Void> googleCallback(String code, String codeVerifier) {
+    GoogleSignInResult result = facade.finishGoogleSignIn(code, codeVerifier);
+    HttpHeaders headers =
+        result.tokens() != null ? cookies.signIn(result.tokens()) : new HttpHeaders();
+    headers.add(HttpHeaders.SET_COOKIE, cookies.clearGoogleVerifier());
+    return ResponseEntity.status(HttpStatus.FOUND)
+        .location(result.location())
+        .headers(headers)
+        .build();
   }
 
   @Override

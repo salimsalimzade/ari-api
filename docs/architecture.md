@@ -1,6 +1,6 @@
 # ari-api architecture
 
-Last updated 2026-10-12. The server side of Ari: how `ari-api` connects to its callers and
+Last updated 2026-11-02. The server side of Ari: how `ari-api` connects to its callers and
 services, its sign-in rules and error codes, and how to build it. Read it together with
 `.claude/skills/ari-api/SKILL.md`. If they ever disagree, ask before writing code.
 
@@ -20,7 +20,9 @@ flowchart LR
   ext["Browser extension<br/>Chrome, Firefox"]
   web["ari<br/>SolidStart server"]
   api["ari-api<br/>Spring Boot"]
-  db[("PostgreSQL<br/>data and search")]
+  supa["Supabase Auth<br/>accounts, passwords, Google, sessions"]
+  db[("PostgreSQL (Supabase's)<br/>data, search and the auth schema")]
+  google["Google<br/>sign-in"]
   redis[("Redis 8<br/>username Bloom filter, one-time codes,<br/>rate limits, idempotency keys")]
   mq[["RabbitMQ<br/>import.process, email.*"]]
   files[("MinIO<br/>profile photos, uploads, clip images")]
@@ -35,6 +37,10 @@ flowchart LR
   browser -- "checkout (Paddle.js)" --> paddle
   paddle -- "webhooks" --> api
   api --> db
+  api -- "sign-in, sessions (secret key)" --> supa
+  supa --> db
+  browser -- "Continue with Google (redirects)" --> supa
+  supa -- "OAuth" --> google
   api --> redis
   api <-- "publish, consume import.process and email.*" --> mq
   api -- "S3 API" --> files
@@ -54,8 +60,14 @@ Key decisions:
   the browser's cookies), the browser after hydration (cookies, with CORS allowing the web origin
   and credentials), and the extension (F13, `Authorization: Bearer`, with CORS allowing extension
   origins without credentials).
-- Only `ari-api` talks to PostgreSQL and receives Paddle webhooks. Only the webhook changes a user's
-  plan.
+- **Supabase Auth** keeps the accounts' passwords, Google identities and sessions in the `auth`
+  schema of the same PostgreSQL, and issues the tokens (JWTs signed with the project's asymmetric
+  keys). Only `ari-api` calls it, with the project's secret key: the website and the extension never
+  see Supabase, its keys or its client library; they keep using `ari-api`'s cookies and JSON
+  tokens. A `users` row is the profile of one `auth.users` row, made by a database trigger when
+  Supabase creates the user ([database.md](database.md#12-account-and-billing)).
+- Only `ari-api` reads and writes the app's tables and receives Paddle webhooks. Supabase's Data API
+  (PostgREST) gets no grants on them. Only the webhook changes a user's plan.
 - **Redis 8** has the Bloom filter built in (`BF.*` commands, sent through Spring Data Redis's
   `RedisConnection.execute`, no extra client). A Bloom filter of taken usernames answers the live
   "is this username free?" check without the database in most cases; the database's unique key
@@ -129,11 +141,15 @@ Every value comes from an environment variable (locally from `.env`, see `.env.e
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `DB_URL`, `DB_USERNAME` | `jdbc:postgresql://localhost:5432/ari`, `ari` | PostgreSQL; `docker compose up -d postgres` starts one |
-| `DB_PASSWORD` | none (required) | Also sets the password of the compose `postgres` service |
+| `DB_URL`, `DB_USERNAME` | `jdbc:postgresql://127.0.0.1:54322/postgres`, `postgres` | Supabase's PostgreSQL; `supabase start` serves it on 54322. A hosted project: its session pooler |
+| `DB_PASSWORD` | none (required) | `postgres` locally; the project's database password when hosted |
+| `SUPABASE_URL` | `http://127.0.0.1:54321` | Where `ari-api` calls Supabase Auth; `supabase start` serves it |
+| `SUPABASE_PUBLIC_URL` | blank (`SUPABASE_URL`) | Where browsers reach it (Google sign-in), and its tokens' issuer; only differs when `ari-api` runs in Docker |
+| `SUPABASE_SECRET_KEY` | none (required) | The project's secret key (`sb_secret_...`): `supabase status` prints the local one |
+| `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID`, `..._SECRET` | none | Read by `supabase start` from `.env`, not by `ari-api`: the Google OAuth client |
+| `APP_API_URL` | `http://localhost:8080` | `ari-api` as browsers reach it, for Google's way back |
 | `RABBITMQ_HOST`, `RABBITMQ_PORT` | `localhost`, `5672` | RabbitMQ; `docker compose up -d rabbitmq` starts one |
 | `RABBITMQ_USERNAME`, `RABBITMQ_PASSWORD` | `ari`, none | Also set the user of the compose `rabbitmq` service |
-| `APP_JWT_SECRET` | none (required) | HS256 key for access tokens, at least 32 characters (`openssl rand -base64 48`) |
 | `APP_COOKIE_SECURE` | `true` | `false` only for `http://localhost` |
 | `APP_COOKIE_DOMAIN` | blank | Shared parent domain in production; blank keeps cookies on the API host |
 | `APP_SEED_DEMO_DATA` | `false` | Adds `demo` / `demo1234`; local development and tests only |
@@ -153,18 +169,22 @@ Every value comes from an environment variable (locally from `.env`, see `.env.e
 
 | Rule | Value |
 |---|---|
-| Access cookie | `ari_access`: JWT, HS256, 15 minutes, claims `iss` (`ari-api`), `sub` (user id), `plan`. Cookie `Max-Age` 14 minutes, so a cookie the browser still sends never holds an expired JWT |
-| Refresh cookie | `ari_refresh`: 32 random bytes, 30 days from the last refresh, replaced on every refresh |
-| Freshness cookie | `ari_access_fresh=1`: no token, `Max-Age` 13 minutes, so it goes a minute before `ari_access`. Not `HttpOnly`: the website reads it and refreshes before an upload instead of sending the file to get a 401. Set and cleared with the other two |
-| Cookie flags | Both: `Path=/`, `HttpOnly`, `SameSite=Lax`, `Secure` outside local http, `Domain` = shared parent domain in production. `Path=/` lets the `ari` server send `ari_refresh` and refresh while rendering ([sequences §2](sequences.md#2-token-refresh-f1)) |
-| Reuse detection | A replaced refresh token used again within 10 seconds still gets a new pair, while its session has an active token (a server render and a browser call refreshing at once). Otherwise using it revokes its whole session. Logout stays final |
-| Refresh fails | 401 `UNAUTHORIZED`, and both cookies are cleared; only the API can delete httpOnly cookies |
-| Passwords | 8 characters to 72 bytes (bcrypt's limit), stored as bcrypt hashes |
-| Login answers | `INVALID_CREDENTIALS` for every failure, and unknown usernames run a bcrypt check too, so neither the answer nor its timing reveals which usernames exist |
-| Stored secrets | Only the SHA-256 hash of a refresh token |
-| Logout | `POST /api/v1/auth/logout` revokes the session and clears both cookies (always 204) |
+| Accounts | Supabase Auth users. Password users sign in with their username: `ari-api` finds the user's Supabase sign-in email (their verified email, or `<id>@no-email.ari.invalid` until they have one) and signs in with it. Google users come through Supabase's Google provider ([sequences §2.1](sequences.md#21-continue-with-google-f9)) |
+| Access cookie | `ari_access`: Supabase's JWT (ES256, 15 minutes with `jwt_expiry = 900`), claims `iss` (`<SUPABASE_PUBLIC_URL>/auth/v1`), `sub` (user id), `aud` (`authenticated`), `session_id`. Cookie `Max-Age` is the token's `expires_in` minus a minute, so a cookie the browser still sends never holds an expired JWT |
+| Token checks | Signature against the project's JWKS (`/auth/v1/.well-known/jwks.json`, ES256 or RS256, cached), expiry with the injected `Clock`, the issuer, and `aud` = `authenticated`, so the project's API keys (JWTs too) never pass |
+| Refresh cookie | `ari_refresh`: Supabase's refresh token, `Max-Age` 30 days, replaced on every refresh |
+| Freshness cookie | `ari_access_fresh=1`: no token, gone a minute before `ari_access`. Not `HttpOnly`: the website reads it and refreshes before an upload instead of sending the file to get a 401. Set and cleared with the other two |
+| Google verifier | `ari_google`: the PKCE verifier of a Google sign-in, `HttpOnly`, `Path=/api/v1/auth/google`, 10 minutes, cleared on the way back |
+| Cookie flags | All: `SameSite=Lax`, `Secure` outside local http, `Domain` = shared parent domain in production. `Path=/` (but `ari_google`) lets the `ari` server send `ari_refresh` and refresh while rendering ([sequences §2](sequences.md#2-token-refresh-f1)) |
+| Reuse detection | Supabase's: a replaced refresh token works for 10 more seconds (`refresh_token_reuse_interval`), for a server render and a browser call refreshing at once; reused later, it ends its session |
+| Refresh fails | 401 `UNAUTHORIZED`, and the cookies are cleared; only the API can delete httpOnly cookies |
+| Passwords | 8 characters to 72 bytes (bcrypt's limit), kept by Supabase (bcrypt). Supabase's own rules may refuse one too: 400 `WEAK_PASSWORD` |
+| Login answers | `INVALID_CREDENTIALS` for every failure; an unknown username is still sent to Supabase (as an address nobody has), so it takes a round trip like a wrong password. Supabase's rate limit is 429 `RATE_LIMITED` |
+| Rate limits | Supabase limits sign-ins and refreshes per address. Every call carries the browser's address in `Sb-Forwarded-For`, which a hosted project must allow (Authentication, Rate Limits, "IP address forwarding"); otherwise all users share `ari-api`'s address and its limits |
+| Stored secrets | None of the tokens: Supabase keeps its refresh tokens; `ari-api` only holds the secret key |
+| Logout | `POST /api/v1/auth/logout` signs the session out at Supabase (with `ari_access`, or a refresh first when it is gone) and clears the cookies (always 204) |
 | Stale cookies | The sign-in endpoints (`/api/v1/auth/**`) ignore `ari_access`, so an old cookie never blocks signing in |
-| Extension | Same token rules, but the tokens travel in JSON bodies and `Authorization: Bearer`, never in cookies. It signs in with a code the signed-in website gets from `POST /api/v1/me/extension-code`, or that `POST /api/v1/auth/extension/code` gives for another account's username and password without setting cookies (60 seconds, single use, only its SHA-256 in Redis), swapped at `POST /api/v1/auth/extension/token`; then `/auth/extension/refresh` and `/auth/extension/logout` take the refresh token in the body ([sequences §6](sequences.md#6-save-from-the-extension-f13)). Its refresh tokens are stored with `client = EXTENSION`, and each refresh endpoint takes only its own client's tokens |
+| Extension | Its own Supabase session; the tokens travel in JSON bodies and `Authorization: Bearer`, never in cookies. It signs in with a code the signed-in website gets from `POST /api/v1/me/extension-code`, or that `POST /api/v1/auth/extension/code` gives for another account's username and password without setting cookies (60 seconds, single use, only its SHA-256 in Redis), swapped at `POST /api/v1/auth/extension/token` for a session `ari-api` starts through Supabase's admin API (a magic-link token that is never emailed); then `/auth/extension/refresh` and `/auth/extension/logout` take the refresh token in the body ([sequences §6](sequences.md#6-save-from-the-extension-f13)) |
 | Extension CORS | Firefox sends `Origin: moz-extension://<uuid>`, a uuid of each install, so `moz-extension://*` and `chrome-extension://*` are allowed by pattern, without credentials |
 
 ## 4. Error codes
@@ -176,6 +196,7 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 | `VALIDATION_FAILED` | 400 | Bad body, query or upload (file type or size) |
 | `UNAUTHORIZED` | 401 | Missing, expired or invalid token, sign-in code or webhook signature |
 | `INVALID_CREDENTIALS` | 401 | Wrong username or password |
+| `WEAK_PASSWORD` | 400 | A password that passed ari-api's rules but not Supabase Auth's (stricter settings on a hosted project) |
 | `INVALID_CODE` | 401 | An email's verify link, or the extension's sign-in code, is unknown, expired or used; or a newer address is waiting for its link; or a password's reset link is unknown (an expired or used one is 410) |
 | `NOT_FOUND` | 404 | The item does not exist or belongs to another user |
 | `INVALID_SAVE` | 400 | A save breaks the rules of its kind: a highlight without a color, a clip with one or without a clip type, a table clip without Markdown, an image clip without its image, an `IMPORT` posted directly; or a color set on a clip |
@@ -194,8 +215,8 @@ Every error is an RFC 9457 Problem Detail with a stable `code`.
 | `UNSUPPORTED_FILE` | 400 | An imported file that isn't a PDF or a Word DOCX by its bytes |
 | `NO_SPACE_LEFT` | 400 | An imported file that doesn't fit in what is left of the upload space (50 MB for everyone, in files of any size) |
 | `INVALID_IMPORT_STATE` | 409 | An import action its status doesn't allow: a review before the file is read, Retry of a file that didn't fail, Discard after the review, Dismiss of one still in use |
-| `EMAIL_TAKEN` | 409 | A verify link is opened for an address another account verified first |
-| `RATE_LIMITED` | 429 | Too many requests in a minute (Redis counters), e.g. the username check, or over the limits of email links and reset requests |
+| `EMAIL_TAKEN` | 409 | A verify link is opened for an address another account verified first, or a Google account signs in with |
+| `RATE_LIMITED` | 429 | Too many requests in a minute (Redis counters), e.g. the username check, or over the limits of email links and reset requests; or Supabase Auth's sign-in limits |
 
 ## 5. How it is built
 
@@ -209,15 +230,13 @@ first real module; copy its patterns.
 - A domain port (`UserRepository`) gets a MyBatis adapter in `infrastructure/`: a `@Mapper`
   interface that extends the port (`UserMyBatisRepository`) plus its SQL in
   `resources/persistence/UserMyBatisRepository.xml`. Rows map straight into the domain records by
-  constructor argument name (`password_hash` → `passwordHash`).
+  constructor argument name (`pending_email` → `pendingEmail`).
 - `common/handlers` holds the type handlers: `Instant` ↔ `timestamptz` in UTC, `UUID` ↔ `uuid`.
 - Uniqueness is the database's job: inserts use `ON CONFLICT DO NOTHING` and return `false` when a
-  unique key already exists; `revoke` matches only `revoked_at IS NULL`, so two parallel refreshes
-  of one token can't both win.
+  unique key already exists.
 - Services return `Optional` or `boolean`; facades turn "empty" into feature exceptions
-  (`application/exception/`). `@Transactional` goes on facade use cases, except where a failed
-  request must keep its writes: refresh and logout commit inside `TokenService`, so reuse detection
-  stays in force after its 401.
+  (`application/exception/`). `@Transactional` goes on facade use cases that write the app's
+  tables; sign-in writes none (Supabase keeps the sessions, and its trigger makes the profile).
 
 **F1 Sign in**
 
@@ -226,27 +245,79 @@ first real module; copy its patterns.
   (`config/CorsConfig`). Public: `/api/v1/auth/**`, `/actuator/health`,
   Swagger and `/error`. Everything else needs a valid JWT; a missing or bad one gets a 401 Problem
   Detail from `ProblemDetailsAuthenticationEntryPoint`.
-- JWTs: `NimbusJwtEncoder` / `NimbusJwtDecoder`, HS256 with `APP_JWT_SECRET`, issuer `ari-api`.
-  The decoder checks expiry with the injected `Clock`. `CookieBearerTokenResolver` reads
-  `ari_access`, then the `Authorization` header, and nothing on `/api/v1/auth/**`.
-- `TokenService` creates and rotates tokens, and the extension's sign-in codes
-  (`ExtensionCodeRedisRepository`); `AccountControllerImpl` turns the website's tokens into cookies
-  through `AuthCookies` and sends the extension's as JSON.
-- `DemoUserSeeder` adds the demo user when `APP_SEED_DEMO_DATA=true`, so production never has one.
+- JWTs: a `NimbusJwtDecoder` on Supabase's JWKS, with `SecurityConfig.tokenValidator` (expiry with
+  the injected `Clock`, issuer, audience). `CookieBearerTokenResolver` reads `ari_access`, then the
+  `Authorization` header, and nothing on `/api/v1/auth/**`. `ari-api` signs no token.
+- `domain/port/IdentityProvider` is Supabase Auth, as the account feature needs it: create a user,
+  sign in, refresh, sign out, a session without a password (the extension), Google's PKCE code,
+  and the sign-in email and password. `infrastructure/SupabaseIdentityProvider` calls GoTrue's REST
+  API with a `RestClient` and the secret key; nothing else knows Supabase.
+- `TokenService` signs in by username, rotates and ends sessions, issues the extension's sign-in
+  codes (`ExtensionCodeRedisRepository`) and runs Google sign-in; `AccountControllerImpl` turns the
+  website's tokens into cookies through `AuthCookies` and sends the extension's as JSON.
+- `DemoUserSeeder` adds the demo user through Supabase when `APP_SEED_DEMO_DATA=true`, so
+  production never has one.
 
 ### Tests that prove it works
 
-`./gradlew check` runs them against a PostgreSQL 18 container (Testcontainers; Docker must be
-running):
+`./gradlew check` runs them against Supabase's PostgreSQL image (Testcontainers; Docker must be
+running), so the `auth` schema, the profile trigger and the foreign key are real. Supabase Auth is
+`FakeSupabaseAuth` (test `support/`): users and sessions in memory, tokens signed with its own key,
+which the tests' decoder trusts, and every user inserted into `auth.users` so the trigger runs:
 
 - `AccountControllerTest`: register and login set both cookies with their flags; a taken username in
   any case is 409; bad input and passwords over 72 bytes are 400; `/me` works with the cookie or a
-  Bearer header and is 401 without one or after 15 minutes; refresh rotates; a replaced token works
-  for 10 seconds and then revokes its session; logout clears the cookies and ends the session; a
-  stale cookie doesn't block login; the CORS preflight allows credentials.
+  Bearer header and is 401 without one or after 15 minutes; refresh rotates and a replaced token
+  stops working; logout (with either cookie) clears the cookies and ends the session; a stale cookie
+  doesn't block login; the CORS preflight allows credentials.
+- `GoogleSignInTest` (F9): the start goes to Supabase's `/authorize` with a PKCE challenge and sets
+  `ari_google`; a new Google user gets an account with their email and name, goes to `/welcome`, and
+  `PUT /me` confirms the username; two users with the same email name get different usernames;
+  another browser's verifier or a cancelled sign-in goes to `/login?error=google`.
 - `ExtensionSignInTest` (F13): the website's code signs the extension in once and sets no cookies;
   another account's password gives a code without touching the website's cookies, a wrong one 401
-  `INVALID_CREDENTIALS`; a code needs a signed-in website; the extension refreshes its own tokens with reuse detection;
-  website and extension refresh tokens don't mix; extension logout leaves the website signed in;
+  `INVALID_CREDENTIALS`; a code needs a signed-in website; the extension refreshes its own tokens;
+  extension logout leaves the website signed in;
   CORS lets `moz-extension://` origins in without credentials and keeps other origins out.
-- `AriApiApplicationTests`: Liquibase creates the tables, health is UP. `ArchitectureTest`: the layer rules from SKILL.md.
+- `AriApiApplicationTests`: Liquibase creates the tables, a profile needs its Supabase user and
+  goes with it, the Data API roles have no grants and every table has row-level security, health is
+  UP. `ArchitectureTest`: the layer rules from SKILL.md.
+
+## 6. Deploying Supabase
+
+`.github/workflows/deploy.yml` sets up the hosted Supabase project (`my-ari`) after `ci` passes on
+`main`, or when run by hand. Hosting `ari-api` and the website comes later and joins the same
+workflow.
+
+1. **Database migrations:** `./gradlew migrate` runs Liquibase's command line on the app's own
+   classpath (the same Liquibase and changelog as at startup, so the API later finds every
+   changeset applied) against the project's session pooler.
+2. **Auth settings:** `supabase config push` sends `supabase/config.toml` with its
+   `[remotes.production]` block: the Google provider, the site address and the Google callback,
+   15-minute tokens, the password rules. `supabase config diff --project-ref <ref>` shows what it
+   would change, without changing anything.
+
+The `production` environment in the repository's settings (Settings, Environments) holds:
+
+| Name | Kind | Value |
+|---|---|---|
+| `SUPABASE_PROJECT_REF` | variable | The project's ref, also `[remotes.production].project_id` in `supabase/config.toml` |
+| `ARI_WEB_URL` | variable | The website, e.g. `https://ari.example`: Supabase's site address |
+| `ARI_API_URL` | variable | `ari-api`, e.g. `https://api.ari.example`: Google returns to its `/api/v1/auth/google/callback` |
+| `SUPABASE_ACCESS_TOKEN` | secret | A personal access token (Account, Access Tokens) for the CLI |
+| `SUPABASE_DB_URL` | secret | The session pooler as JDBC, from Connect, Session pooler: `jdbc:postgresql://aws-0-eu-west-1.pooler.supabase.com:5432/postgres?sslmode=require`. GitHub's runners have no IPv6, which the direct address needs |
+| `SUPABASE_DB_USERNAME` | secret | The pooler's user: `postgres.<project ref>` |
+| `SUPABASE_DB_PASSWORD` | secret | The database password |
+| `SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID`, `SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET` | secrets | The production Google OAuth client, whose authorized redirect URI is `https://<project ref>.supabase.co/auth/v1/callback` |
+
+Once, by hand, in the dashboard:
+
+- **Rate limits:** Authentication, Rate Limits, turn on IP address forwarding, so the
+  `Sb-Forwarded-For` address `ari-api` sends counts instead of its own.
+- **Signing keys:** the project signs with ES256 keys already (JWT Keys); `ari-api` checks tokens
+  against its JWKS, so nothing to copy.
+- **Google OAuth client:** the consent screen's app name is the one Google shows ("Ari").
+
+The workflow never changes what `config.toml` doesn't declare, and `email` confirmations stay on:
+a sign-up through Supabase's public API with someone else's address must never count as theirs,
+since a Google sign-in with that address would join it.

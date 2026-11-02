@@ -1,106 +1,72 @@
 package app.ari.api.feature.account.domain.service.impl;
 
+import app.ari.api.feature.account.domain.model.GoogleSignIn;
 import app.ari.api.feature.account.domain.model.IssuedTokens;
-import app.ari.api.feature.account.domain.model.RefreshToken;
-import app.ari.api.feature.account.domain.model.TokenClient;
-import app.ari.api.feature.account.domain.model.User;
+import app.ari.api.feature.account.domain.model.NoEmail;
+import app.ari.api.feature.account.domain.model.Usernames;
+import app.ari.api.feature.account.domain.port.IdentityProvider;
 import app.ari.api.feature.account.domain.repository.ExtensionCodeRepository;
-import app.ari.api.feature.account.domain.repository.RefreshTokenRepository;
 import app.ari.api.feature.account.domain.repository.UserRepository;
 import app.ari.api.feature.account.domain.service.TokenService;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.SecureRandom;
-import java.time.Clock;
 import java.time.Duration;
-import java.time.Instant;
 import java.util.Base64;
 import java.util.HexFormat;
 import java.util.Optional;
 import java.util.UUID;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
-import org.springframework.security.oauth2.jwt.JwsHeader;
-import org.springframework.security.oauth2.jwt.JwtClaimsSet;
-import org.springframework.security.oauth2.jwt.JwtEncoder;
-import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
+import org.springframework.util.StringUtils;
 
 @Service
 public class TokenServiceImpl implements TokenService {
-
-  static final Duration ACCESS_TOKEN_TTL = Duration.ofMinutes(15);
-  static final Duration REFRESH_TOKEN_TTL = Duration.ofDays(30);
-
-  /**
-   * How long a replaced refresh token still works, for two requests that refresh at once (a server
-   * render and a browser call). Only while its session is alive, so logout stays final.
-   */
-  static final Duration REUSE_GRACE = Duration.ofSeconds(10);
 
   /**
    * Long enough for the website tab to hand the code to the extension, which redeems it at once.
    */
   static final Duration EXTENSION_CODE_LIFETIME = Duration.ofSeconds(60);
 
-  private static final Logger log = LoggerFactory.getLogger(TokenServiceImpl.class);
-
-  private final JwtEncoder jwtEncoder;
-  private final RefreshTokenRepository refreshTokens;
-  private final ExtensionCodeRepository extensionCodes;
+  private final IdentityProvider identity;
   private final UserRepository users;
-  private final Clock clock;
+  private final ExtensionCodeRepository extensionCodes;
   private final SecureRandom random = new SecureRandom();
 
   public TokenServiceImpl(
-      JwtEncoder jwtEncoder,
-      RefreshTokenRepository refreshTokens,
-      ExtensionCodeRepository extensionCodes,
-      UserRepository users,
-      Clock clock) {
-    this.jwtEncoder = jwtEncoder;
-    this.refreshTokens = refreshTokens;
-    this.extensionCodes = extensionCodes;
+      IdentityProvider identity, UserRepository users, ExtensionCodeRepository extensionCodes) {
+    this.identity = identity;
     this.users = users;
-    this.clock = clock;
+    this.extensionCodes = extensionCodes;
   }
 
   @Override
-  public IssuedTokens issue(User user, TokenClient client) {
-    return issue(user, client, UUID.randomUUID(), clock.instant());
+  public Optional<IssuedTokens> signIn(String username, String password) {
+    Optional<UUID> id = users.findByUsername(Usernames.normalize(username)).map(user -> user.id());
+    if (id.isEmpty()) {
+      // An address nobody has, so the answer comes from Supabase like a wrong password's.
+      identity.signIn(NoEmail.of(UUID.randomUUID()), password);
+      return Optional.empty();
+    }
+    return identity.email(id.get()).flatMap(email -> identity.signIn(email, password));
   }
 
   @Override
-  @Transactional
-  public Optional<IssuedTokens> rotate(String refreshToken, TokenClient client) {
-    Optional<RefreshToken> found = refreshTokens.findByTokenHash(hash(refreshToken));
-    if (found.isEmpty() || found.get().client() != client) {
-      return Optional.empty();
-    }
-    RefreshToken token = found.get();
-    Instant now = clock.instant();
-    if (!now.isBefore(token.expiresAt())) {
-      return Optional.empty();
-    }
-    if (!refreshTokens.revoke(token.id(), now) && !withinReuseGrace(token, now)) {
-      log.warn("Refresh token reused; revoking session {}", token.familyId());
-      refreshTokens.revokeFamily(token.familyId(), now);
-      return Optional.empty();
-    }
-    return users
-        .findById(token.userId())
-        .map(user -> issue(user, token.client(), token.familyId(), now));
+  public Optional<IssuedTokens> rotate(String refreshToken) {
+    return identity.refresh(refreshToken);
   }
 
   @Override
-  @Transactional
-  public void revokeSession(String refreshToken) {
-    refreshTokens
-        .findByTokenHash(hash(refreshToken))
-        .ifPresent(token -> refreshTokens.revokeFamily(token.familyId(), clock.instant()));
+  public void revokeSession(String accessToken, String refreshToken) {
+    if (StringUtils.hasText(accessToken) && identity.signOut(accessToken, false)) {
+      return;
+    }
+    // Supabase signs out with an access token; a working refresh token still gets one.
+    if (StringUtils.hasText(refreshToken)) {
+      identity
+          .refresh(refreshToken)
+          .ifPresent(tokens -> identity.signOut(tokens.accessToken(), false));
+    }
   }
 
   @Override
@@ -111,52 +77,29 @@ public class TokenServiceImpl implements TokenService {
   }
 
   @Override
-  @Transactional
   public Optional<IssuedTokens> redeemExtensionCode(String code) {
-    return extensionCodes
-        .take(hash(code))
-        .flatMap(users::findById)
-        .map(user -> issue(user, TokenClient.EXTENSION));
+    return extensionCodes.take(hash(code)).flatMap(identity::newSession);
   }
 
-  private IssuedTokens issue(User user, TokenClient client, UUID familyId, Instant now) {
-    JwtClaimsSet claims =
-        JwtClaimsSet.builder()
-            .issuer(ISSUER)
-            .subject(user.id().toString())
-            .issuedAt(now)
-            .expiresAt(now.plus(ACCESS_TOKEN_TTL))
-            .claim("plan", user.plan().name())
-            .build();
-    JwsHeader header = JwsHeader.with(MacAlgorithm.HS256).build();
-    String accessToken =
-        jwtEncoder.encode(JwtEncoderParameters.from(header, claims)).getTokenValue();
-
-    String refreshToken = newRandomToken();
-    refreshTokens.insert(
-        new RefreshToken(
-            UUID.randomUUID(),
-            user.id(),
-            hash(refreshToken),
-            familyId,
-            client,
-            now.plus(REFRESH_TOKEN_TTL),
-            null,
-            now));
-    return new IssuedTokens(accessToken, refreshToken);
+  @Override
+  public GoogleSignIn startGoogleSignIn(String redirectTo) {
+    String verifier = newRandomToken();
+    String challenge =
+        Base64.getUrlEncoder()
+            .withoutPadding()
+            .encodeToString(sha256(verifier.getBytes(StandardCharsets.US_ASCII)));
+    return new GoogleSignIn(identity.googleSignInUrl(redirectTo, challenge), verifier);
   }
 
-  /**
-   * The token was replaced moments ago (or just now, by a parallel request) and its session is
-   * alive.
-   */
-  private boolean withinReuseGrace(RefreshToken token, Instant now) {
-    Instant revokedAt = token.revokedAt() != null ? token.revokedAt() : now;
-    return !now.isAfter(revokedAt.plus(REUSE_GRACE))
-        && refreshTokens.hasActiveToken(token.familyId(), now);
+  @Override
+  public Optional<IssuedTokens> finishGoogleSignIn(String authCode, String codeVerifier) {
+    if (!StringUtils.hasText(authCode) || !StringUtils.hasText(codeVerifier)) {
+      return Optional.empty();
+    }
+    return identity.exchangeCode(authCode, codeVerifier);
   }
 
-  /** 32 random bytes, base64url: a refresh token or an extension code. */
+  /** 32 random bytes, base64url: an extension code or a PKCE verifier (43 characters). */
   private String newRandomToken() {
     byte[] bytes = new byte[32];
     random.nextBytes(bytes);
@@ -164,10 +107,12 @@ public class TokenServiceImpl implements TokenService {
   }
 
   private static String hash(String token) {
+    return HexFormat.of().formatHex(sha256(token.getBytes(StandardCharsets.UTF_8)));
+  }
+
+  private static byte[] sha256(byte[] bytes) {
     try {
-      byte[] digest =
-          MessageDigest.getInstance("SHA-256").digest(token.getBytes(StandardCharsets.UTF_8));
-      return HexFormat.of().formatHex(digest);
+      return MessageDigest.getInstance("SHA-256").digest(bytes);
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException("SHA-256 is not available", e);
     }

@@ -1,9 +1,11 @@
 package app.ari.api.feature.account.application.facade.impl;
 
 import app.ari.api.common.client.Queues;
+import app.ari.api.config.AuthProperties;
 import app.ari.api.config.WebProperties;
 import app.ari.api.feature.account.application.exception.badrequest.InvalidPhotoException;
 import app.ari.api.feature.account.application.exception.badrequest.NoPendingEmailException;
+import app.ari.api.feature.account.application.exception.badrequest.WeakPasswordException;
 import app.ari.api.feature.account.application.exception.conflict.EmailNotConfirmedException;
 import app.ari.api.feature.account.application.exception.conflict.EmailTakenException;
 import app.ari.api.feature.account.application.exception.conflict.NoEmailException;
@@ -37,13 +39,17 @@ import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
 import app.ari.api.feature.account.application.model.response.AuthTokens;
 import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
 import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
+import app.ari.api.feature.account.application.model.response.GoogleSignInResult;
+import app.ari.api.feature.account.application.model.response.GoogleSignInStart;
 import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.PasswordResetCheckResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
 import app.ari.api.feature.account.application.model.response.UsernameAvailabilityResponse;
+import app.ari.api.feature.account.domain.model.GoogleSignIn;
+import app.ari.api.feature.account.domain.model.IssuedTokens;
+import app.ari.api.feature.account.domain.model.Registration;
 import app.ari.api.feature.account.domain.model.ResetLink;
 import app.ari.api.feature.account.domain.model.ResetRecipient;
-import app.ari.api.feature.account.domain.model.TokenClient;
 import app.ari.api.feature.account.domain.model.User;
 import app.ari.api.feature.account.domain.model.Usernames;
 import app.ari.api.feature.account.domain.service.AccountService;
@@ -54,6 +60,7 @@ import app.ari.api.feature.account.domain.service.TokenService;
 import app.ari.api.feature.account.domain.service.UsernameService;
 import app.ari.api.feature.outbox.application.facade.OutboxFacade;
 import app.ari.api.feature.outbox.application.model.request.NewOutboxEvent;
+import java.net.URI;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -62,15 +69,17 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.util.UriComponentsBuilder;
 
 /**
- * Sign-in use cases. Register and login each run in one transaction, so a user is never saved
- * without its session. Refresh, logout and the extension's sign-in get theirs inside {@link
- * TokenService}: a revoked session must stay revoked even though the request then fails with a 401.
- * An email's verify link is queued in the outbox in the same transaction as the pending email, and
- * a password's reset link with its request. The photo use cases are not one transaction: the file
- * goes to storage first, then a single row update points at it.
+ * Sign-in use cases. Supabase Auth keeps the accounts and their sessions, so registering and
+ * signing in write nothing here: the database trigger makes a new user's profile row in Supabase's
+ * own transaction. An email's verify link is queued in the outbox in the same transaction as the
+ * pending email, and a password's reset link with its request. The photo use cases are not one
+ * transaction: the file goes to storage first, then a single row update points at it.
  */
 @Service
 public class AccountFacadeImpl implements AccountFacade {
+
+  /** Where Google, through Supabase, sends the browser back; Supabase's allow list has it. */
+  static final String GOOGLE_CALLBACK = "/api/v1/auth/google/callback";
 
   private final AccountService accountService;
   private final TokenService tokenService;
@@ -80,6 +89,7 @@ public class AccountFacadeImpl implements AccountFacade {
   private final PasswordResetService passwordResetService;
   private final OutboxFacade outbox;
   private final WebProperties web;
+  private final AuthProperties auth;
   private final AccountMapper mapper;
 
   public AccountFacadeImpl(
@@ -91,6 +101,7 @@ public class AccountFacadeImpl implements AccountFacade {
       PasswordResetService passwordResetService,
       OutboxFacade outbox,
       WebProperties web,
+      AuthProperties auth,
       AccountMapper mapper) {
     this.accountService = accountService;
     this.tokenService = tokenService;
@@ -100,30 +111,28 @@ public class AccountFacadeImpl implements AccountFacade {
     this.passwordResetService = passwordResetService;
     this.outbox = outbox;
     this.web = web;
+    this.auth = auth;
     this.mapper = mapper;
   }
 
   @Override
-  @Transactional
   public SignedIn register(RegisterRequest request) {
+    Registration registration =
+        accountService.register(
+            request.username(), request.password(), request.fullName(), request.birthDate());
     User user =
-        accountService
-            .register(
-                request.username(), request.password(), request.fullName(), request.birthDate())
-            .orElseThrow(UsernameTakenException::new);
-    // A rolled-back insert only leaves a name the database check then finds free.
+        switch (registration.status()) {
+          case CREATED -> registration.user();
+          case USERNAME_TAKEN -> throw new UsernameTakenException();
+          case WEAK_PASSWORD -> throw new WeakPasswordException();
+        };
     usernameService.remember(user.username());
-    return signIn(user);
+    return signIn(request.username(), request.password());
   }
 
   @Override
-  @Transactional
   public SignedIn login(LoginRequest request) {
-    User user =
-        accountService
-            .authenticate(request.username(), request.password())
-            .orElseThrow(InvalidCredentialsException::new);
-    return signIn(user);
+    return signIn(request.username(), request.password());
   }
 
   @Override
@@ -132,16 +141,33 @@ public class AccountFacadeImpl implements AccountFacade {
       throw new SessionExpiredException();
     }
     return tokenService
-        .rotate(refreshToken, TokenClient.WEB)
+        .rotate(refreshToken)
         .map(mapper::toAuthTokens)
         .orElseThrow(SessionExpiredException::new);
   }
 
   @Override
-  public void logout(String refreshToken) {
-    if (StringUtils.hasText(refreshToken)) {
-      tokenService.revokeSession(refreshToken);
+  public void logout(String accessToken, String refreshToken) {
+    tokenService.revokeSession(accessToken, refreshToken);
+  }
+
+  @Override
+  public GoogleSignInStart startGoogleSignIn() {
+    GoogleSignIn start = tokenService.startGoogleSignIn(auth.apiUrl() + GOOGLE_CALLBACK);
+    return new GoogleSignInStart(start.url(), start.codeVerifier());
+  }
+
+  @Override
+  public GoogleSignInResult finishGoogleSignIn(String authCode, String codeVerifier) {
+    Optional<IssuedTokens> tokens = tokenService.finishGoogleSignIn(authCode, codeVerifier);
+    Optional<User> user = tokens.flatMap(issued -> accountService.findById(issued.userId()));
+    if (tokens.isEmpty() || user.isEmpty()) {
+      return new GoogleSignInResult(webPage("/login", "google"), null);
     }
+    // Its generated username joins the filter like a chosen one; the welcome page may change it.
+    usernameService.remember(user.get().username());
+    String page = user.get().needsUsername() ? "/welcome" : "/library";
+    return new GoogleSignInResult(webPage(page, null), mapper.toAuthTokens(tokens.get()));
   }
 
   @Override
@@ -151,11 +177,13 @@ public class AccountFacadeImpl implements AccountFacade {
 
   @Override
   public ExtensionCodeResponse extensionCode(LoginRequest request) {
-    User user =
-        accountService
-            .authenticate(request.username(), request.password())
+    // Supabase checks a password only by starting a session, which the code doesn't need.
+    IssuedTokens tokens =
+        tokenService
+            .signIn(request.username(), request.password())
             .orElseThrow(InvalidCredentialsException::new);
-    return new ExtensionCodeResponse(tokenService.issueExtensionCode(user.id()));
+    tokenService.revokeSession(tokens.accessToken(), null);
+    return new ExtensionCodeResponse(tokenService.issueExtensionCode(tokens.userId()));
   }
 
   @Override
@@ -169,14 +197,14 @@ public class AccountFacadeImpl implements AccountFacade {
   @Override
   public ExtensionTokensResponse refreshExtension(ExtensionRefreshRequest request) {
     return tokenService
-        .rotate(request.refreshToken(), TokenClient.EXTENSION)
+        .rotate(request.refreshToken())
         .map(mapper::toExtensionTokens)
         .orElseThrow(ExtensionSessionExpiredException::new);
   }
 
   @Override
   public void logoutExtension(ExtensionRefreshRequest request) {
-    tokenService.revokeSession(request.refreshToken());
+    tokenService.revokeSession(null, request.refreshToken());
   }
 
   @Override
@@ -268,7 +296,6 @@ public class AccountFacadeImpl implements AccountFacade {
   }
 
   @Override
-  @Transactional
   public void resetPassword(PasswordResetConfirmRequest request) {
     validUser(passwordResetService.reset(request.code(), request.password()));
   }
@@ -336,6 +363,7 @@ public class AccountFacadeImpl implements AccountFacade {
       case EXPIRED -> throw new ResetCodeExpiredException();
       case USED -> throw new ResetCodeUsedException();
       case INVALID -> throw new InvalidResetCodeException();
+      case WEAK_PASSWORD -> throw new WeakPasswordException();
     };
   }
 
@@ -364,8 +392,18 @@ public class AccountFacadeImpl implements AccountFacade {
     return "az".equals(language) ? "az" : "en";
   }
 
-  private SignedIn signIn(User user) {
-    AuthTokens tokens = mapper.toAuthTokens(tokenService.issue(user, TokenClient.WEB));
-    return new SignedIn(toMe(user), tokens);
+  private SignedIn signIn(String username, String password) {
+    IssuedTokens tokens =
+        tokenService.signIn(username, password).orElseThrow(InvalidCredentialsException::new);
+    return new SignedIn(toMe(currentUser(tokens.userId())), mapper.toAuthTokens(tokens));
+  }
+
+  /** A page of the website, with {@code ?error=} when given. */
+  private URI webPage(String path, String error) {
+    UriComponentsBuilder page = UriComponentsBuilder.fromUriString(web.url()).path(path);
+    if (error != null) {
+      page.queryParam("error", error);
+    }
+    return page.build().toUri();
   }
 }

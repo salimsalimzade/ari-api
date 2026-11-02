@@ -5,7 +5,7 @@ description: Setup guide and roadmap for ari-api, the Java / Spring Boot backend
 
 # ari-api: backend setup guide and roadmap
 
-Last updated 2026-10-15. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
+Last updated 2026-11-02. Ari ("arı" means "bee" in Azerbaijani) lives in two repositories:
 
 - **ari-api** (this repo): the Java / Spring Boot backend.
 - **ari**: the frontend (SolidStart website now, browser extension later). It calls this API from
@@ -13,8 +13,8 @@ Last updated 2026-10-15. Ari ("arı" means "bee" in Azerbaijani) lives in two re
 
 Write "Ari" in UI text and `ari` in code, package names and URLs; never use the dotless "ı" there.
 
-Accounts are real: sign-in with a password (F1), stored in PostgreSQL with Liquibase
-and MyBatis. Every new feature stores its data in PostgreSQL from the start; there is no in-memory
+Accounts are real: sign-in with a username and password (F1) or Google (F9) through Supabase
+Auth, profiles stored in Supabase's PostgreSQL with Liquibase and MyBatis. Every new feature stores its data in PostgreSQL from the start; there is no in-memory
 mode. Formatting, linting and CI run on every change. Not yet: billing.
 Those are the TODO list in section 10, with the decisions already made. Diagrams and the sign-in
 rules are in `docs/` (`architecture.md`, `sequences.md`, `database.md`).
@@ -37,8 +37,10 @@ tables.
 
 | Command | What happens |
 |---|---|
-| `docker compose up -d postgres redis rabbitmq mailpit minio` | Starts what `bootRun` needs: PostgreSQL 18 on 5432 (data kept in the `postgres-data` volume), Redis 8 on 6379, RabbitMQ 4 on 5672 (admin page on http://localhost:15672), Mailpit (SMTP on 1025, inbox on http://localhost:8025) and MinIO (S3 API on 9000, console on http://localhost:9001, files in the `minio-data` volume) |
+| `supabase start` | Starts Supabase locally (Docker, config in `supabase/config.toml`): PostgreSQL 17 on 54322 (user and password `postgres`), Supabase Auth on 54321 with Google sign-in, Studio on http://localhost:54323. `supabase status` prints the keys; `supabase stop` keeps the data. Run `supabase gen signing-key --algorithm ES256` once first (into `supabase/signing_keys.json`, git-ignored; create the file with `[]` and pass `--append` if the CLI says it is missing) |
+| `docker compose up -d redis rabbitmq mailpit minio` | Starts the rest of what `bootRun` needs: Redis 8 on 6379, RabbitMQ 4 on 5672 (admin page on http://localhost:15672), Mailpit (SMTP on 1025, inbox on http://localhost:8025) and MinIO (S3 API on 9000, console on http://localhost:9001, files in the `minio-data` volume) |
 | `./gradlew bootRun` | Starts the API on http://localhost:8080; Liquibase creates or updates the tables |
+| `./gradlew migrate` | Applies the Liquibase changesets without starting the API, to the database in `LIQUIBASE_COMMAND_URL`, `_USERNAME`, `_PASSWORD` (the deploy workflow's database step) |
 | `./gradlew spotlessApply` | Formats all Java code (Google Java Style) and removes unused imports |
 | `./gradlew check` | Format check + lint (Error Prone runs while compiling) + tests; Docker must be running (Testcontainers) |
 | `docker compose up --build` | Runs PostgreSQL and the API in containers, the API on port 8080 |
@@ -57,9 +59,10 @@ class `AriApiApplication`.
 | `spring-boot-starter-webmvc` | REST controllers |
 | `spring-boot-starter-validation` | Request validation |
 | `spring-boot-starter-actuator` | `/actuator/health` |
-| `spring-boot-starter-security-oauth2-resource-server` | Spring Security; our JWTs, read from the `ari_access` cookie or a Bearer header |
+| `spring-boot-starter-security-oauth2-resource-server` | Spring Security; Supabase's JWTs, checked against its JWKS, read from the `ari_access` cookie or a Bearer header. Supabase Auth's REST API is called with Spring's `RestClient` (no Supabase library) |
 | `spring-boot-starter-jdbc`, `mybatis-spring-boot-starter` (4.x for Boot 4), `postgresql` | Database access with SQL in XML mappers |
 | `spring-boot-starter-liquibase` | Creates and updates the tables at startup |
+| `picocli` (`liquibaseCli` configuration only, the version liquibase-core names) | Liquibase's command line for `./gradlew migrate`; not part of the app |
 | `spring-boot-starter-data-redis` | Verify-link codes and rate limits (`StringRedisTemplate`); tests run a `redis:8` container |
 | `spring-boot-starter-amqp`, `testcontainers-rabbitmq` | The outbox publisher (publisher confirms) and the consumers; tests run a `rabbitmq:4` container |
 | `software.amazon.awssdk:s3` (BOM `awsSdkVersion`, without the Netty async client), `testcontainers-minio` | `ObjectStorage`: files in MinIO through the S3 API, signed links for images; tests run the same MinIO image |
@@ -68,7 +71,7 @@ class `AriApiApplication`.
 | `springdoc-openapi-starter-webmvc-ui` (the version line for Boot 4) | Swagger UI and `/v3/api-docs` |
 | `mapstruct` + `mapstruct-processor` | Mapping between domain models and request/response DTOs |
 | `spring-boot-starter-test`, `spring-boot-starter-security-test`, `archunit-junit5` | Tests, plus the architecture rules test |
-| `spring-boot-testcontainers`, `testcontainers-postgresql` | A real PostgreSQL 18 container for tests |
+| `spring-boot-testcontainers`, `testcontainers-postgresql` | A real PostgreSQL for tests: Supabase's image (`public.ecr.aws/supabase/postgres`, the version `supabase start` runs), for the `auth` schema |
 | Gradle plugins: `com.diffplug.spotless`, `net.ltgt.errorprone` | Formatting and linting (section 6) |
 
 
@@ -105,7 +108,7 @@ ari-api/
     │   │   ├── response/               # shared DTOs: PageResponse<T>
     │   │   ├── transaction/            # AfterCommit: work that must wait for the commit
     │   │   └── util/                   # small helpers: ids, time
-    │   ├── config/                     # Spring config: security (JWT), OpenAPI, CORS, Clock, RabbitMQ queues, scheduling, mail (later: storage)
+    │   ├── config/                     # Spring config: security (Supabase JWTs), OpenAPI, CORS, Clock, RabbitMQ queues, scheduling, mail (later: storage)
     │   └── feature/                    # one folder per aggregate
     │       ├── save/                   # built, the reference module: the Library (highlights and clips) and its tags
     │       │   ├── presentation/       # SaveController (interface + Swagger) + impl/SaveControllerImpl; uses application types only
@@ -186,7 +189,7 @@ frontend repo mirrors this contract, so keep `/v3/api-docs` accurate: the fronte
 its client from it later.
 
 ```java
-public record MeResponse(UUID id, String username, String fullName, LocalDate birthDate, String email, String pendingEmail, String photoUrl, Plan plan, int savesCount) {}
+public record MeResponse(UUID id, String username, boolean needsUsername, String fullName, LocalDate birthDate, String email, String pendingEmail, String photoUrl, Plan plan, int savesCount) {} // needsUsername: a Google user until PUT /me
 public record SaveResponse(
     UUID id, SaveKind kind, HighlightColor color,   // color: not for a CLIP
     ClipType clipType, String text, String contentMd, String imageUrl, // clips; imageUrl is signed for an hour
@@ -230,14 +233,16 @@ enum FileColor { ORANGE, RED } // a file's own color that had to be mapped
 
 | Endpoint | Feature | Behavior |
 |---|---|---|
-| `POST /auth/register` `{ username, password, fullName, birthDate }` | `account` | 201 + `MeResponse` + both cookies; 409 `USERNAME_TAKEN` |
-| `POST /auth/login` `{ username, password }` | `account` | 200 + `MeResponse` + both cookies; 401 `INVALID_CREDENTIALS` |
-| `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies; 401 clears them |
-| `POST /auth/logout` (`ari_refresh` cookie) | `account` | 204, ends the session and clears the cookies |
+| `POST /auth/register` `{ username, password, fullName, birthDate }` | `account` | 201 + `MeResponse` + both cookies: a Supabase user (placeholder email) made through the admin API, its profile by the trigger; 409 `USERNAME_TAKEN`; 400 `WEAK_PASSWORD` |
+| `POST /auth/login` `{ username, password }` | `account` | 200 + `MeResponse` + both cookies (Supabase's password grant with the user's sign-in email); 401 `INVALID_CREDENTIALS`; 429 `RATE_LIMITED` |
+| `POST /auth/refresh` (`ari_refresh` cookie) | `account` | 204 + new cookies (Supabase's refresh grant); 401 clears them |
+| `POST /auth/logout` (`ari_access`, `ari_refresh` cookies) | `account` | 204, signs the session out at Supabase and clears the cookies |
+| `GET /auth/google` | `account` | 302 to Supabase's Google sign-in with a PKCE challenge; sets `ari_google` (the verifier, 10 minutes) |
+| `GET /auth/google/callback?code=` (`ari_google` cookie) | `account` | Swaps the code for a session, sets both cookies, 302 to the website's `/welcome` (a new Google user, `needsUsername`) or `/library`; `/login?error=google` when anything failed |
 | `POST /me/extension-code` | `account` | 200 `{ code }`: the signed-in website's code for the extension (F13), 60 seconds, single use, its SHA-256 in Redis |
 | `POST /auth/extension/code` `{ username, password }` | `account` | 200 `{ code }` for that account, no cookies: the website's extension sign-in page, so the extension can use another account than the website; 401 `INVALID_CREDENTIALS` |
-| `POST /auth/extension/token` `{ code }` | `account` | 200 `{ accessToken, refreshToken }` as JSON, no cookies: the extension's own session (`client EXTENSION`); 401 `INVALID_CODE` |
-| `POST /auth/extension/refresh` `{ refreshToken }` | `account` | 200 new pair, the cookie rotation rules; only `EXTENSION` tokens; 401 `UNAUTHORIZED`, clearing no cookies |
+| `POST /auth/extension/token` `{ code }` | `account` | 200 `{ accessToken, refreshToken }` as JSON, no cookies: the extension's own Supabase session (a magic-link token from the admin API, never emailed); 401 `INVALID_CODE` |
+| `POST /auth/extension/refresh` `{ refreshToken }` | `account` | 200 new pair (Supabase's refresh); 401 `UNAUTHORIZED`, clearing no cookies |
 | `POST /auth/extension/logout` `{ refreshToken }` | `account` | 204, ends the extension's session; the website's stays |
 | `GET /me` | `account` | The signed-in user (plan `NONE` until the trial starts, `savesCount` for the sidebar, `email` verified and `pendingEmail` waiting); 401 when signed out |
 | `PUT /me` `{ username, fullName, birthDate }` | `account` | 200 + `MeResponse`; the sign-up rules; 409 `USERNAME_TAKEN` in any case |
@@ -417,17 +422,17 @@ jobs:
   images, not JRE-only ones). The build stage runs `./gradlew bootJar`; the runtime stage copies
   the jar and runs it on port 8080. If the wrapper fails with "xargs: command not found", install
   `findutils` in the build stage (`microdnf install -y findutils`).
-- `docker-compose.yml`: `postgres` (`postgres:18`, user, password and database from `.env`, data in
-  the `postgres-data` volume mounted at `/var/lib/postgresql`, the path PostgreSQL 18 expects, and a
-  `pg_isready` healthcheck) and `api`, which waits for a healthy `postgres` and reaches it at
-  `jdbc:postgresql://postgres:5432/ari`. Next to them run `redis` (`redis:8`, which has the Bloom filter built in; no
+- `docker-compose.yml`: no database of its own: PostgreSQL and Auth are Supabase's containers
+  (`supabase start`), which `api` reaches on the host (`host.docker.internal`, ports 54322 and
+  54321; `SUPABASE_PUBLIC_URL` keeps the browser's `127.0.0.1` address as the tokens' issuer).
+  Next to it run `redis` (`redis:8`, which has the Bloom filter built in; no
   volume, since Redis holds nothing that only lives there), `rabbitmq` (`rabbitmq:4-management`,
   user and password from `.env`), `mailpit` (`axllent/mailpit:v1`, catches every email sent
   locally, accepts any SMTP login) and `minio` (`pgsty/minio`, pinned: a community fork, because
   MinIO no longer publishes its own images; key and secret from `.env`, files in the `minio-data`
   volume). In compose, `api` reaches MinIO at `http://minio:9000` but signs photo links for
   `http://localhost:9000`, where the browser reaches it. For `./gradlew bootRun`, start everything
-  but `api`: `docker compose up -d postgres redis rabbitmq mailpit minio`.
+  but `api`: `supabase start`, then `docker compose up -d redis rabbitmq mailpit minio`.
 
 ## 8. Rules for the AI assistant
 
@@ -467,16 +472,25 @@ jobs:
 
 Do these in order, one at a time:
 
-1. **Database (done for accounts):** PostgreSQL 18 + MyBatis + Liquibase, set up with F1. Each
+1. **Database (done for accounts):** Supabase's PostgreSQL (17, local through `supabase start`) +
+   MyBatis + Liquibase, set up with F1. Liquibase owns the `public` schema; Supabase owns `auth`.
+   Every new table needs no grants for Supabase's Data API roles (changeset 012 revokes the defaults)
+   and row-level security on. Each
    repository port gets a MyBatis adapter in `infrastructure/` (e.g. `HighlightMyBatisRepository`)
    with its XML mapper in `resources/persistence/HighlightMyBatisRepository.xml`. TypeHandlers in
    `common/handlers` store `Instant` as UTC. Migrations in `resources/db/changelog/`: a master file
    plus numbered files in `v1/`; never edit an applied file. No in-memory or `mock` mode: the
    frontend runs PostgreSQL with docker compose. Keep a `users.saves_count` counter for the
    Library count in the sidebar. Each library feature adds its own tables (see `docs/database.md`).
-2. **Auth (done, F1):** Spring Security; our own JWT access tokens (15 minutes) plus rotating
-   refresh tokens (httpOnly cookies for the website); username +
-   password with bcrypt (email is optional and comes later, for password changes). Google sign-in (F9) is postponed. Rules in `docs/architecture.md`.
+2. **Auth (done, F1 and F9):** Supabase Auth keeps the accounts, passwords, Google identities and
+   sessions; `ari-api` is the only caller (`domain/port/IdentityProvider`, secret key) and keeps the
+   website's httpOnly cookies and the extension's JSON tokens. Username + password (email optional:
+   a placeholder `<id>@no-email.ari.invalid` until one is verified) and Continue with Google. The
+   profile trigger on `auth.users` makes every `users` row. Rules in `docs/architecture.md`.
+   Deploying: `.github/workflows/deploy.yml` migrates the hosted project's database
+   (`./gradlew migrate`) and pushes the Auth settings (`supabase config push` with
+   `[remotes.production]` in `supabase/config.toml`) after `ci` passes on `main`; setup in
+   `docs/architecture.md` section 6.
 3. **Search (done, F10):** Postgres full-text search: a generated `tsvector` column with the
    `simple` config, an IMMUTABLE wrapper around `unaccent` (`ari_unaccent`), a GIN index, and
    `pg_trgm` for part of a word, in changeset 008 (saves and sources) and 009 (notes, over
@@ -522,4 +536,5 @@ Do these in order, one at a time:
    `ghcr.io/graalvm/native-image-community:25`) for much faster startup and lower memory. Builds
    take minutes and need a lot of RAM, and MyBatis XML mappers need reflection hints, so decide
    after the database step.
-10. **Hosting:** only after everything works locally; a deploy workflow joins `ci.yml` then.
+10. **Hosting:** not chosen yet. `deploy.yml` deploys only Supabase (database and Auth settings)
+    for now; deploying the API and the website joins it once hosting is decided.

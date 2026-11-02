@@ -3,7 +3,7 @@
 <mapper namespace="app.ari.api.feature.account.infrastructure.UserMyBatisRepository">
 
   <sql id="columns">
-    id, email, pending_email, username, password_hash, full_name, birth_date, avatar_key, plan,
+    id, email, pending_email, username, needs_username, full_name, birth_date, avatar_key, plan,
     saves_count, email_verified_at, created_at, updated_at
   </sql>
 
@@ -15,26 +15,7 @@
     SELECT <include refid="columns"/> FROM users WHERE username = #{username}
   </select>
 
-  <!-- A unique key decides: 0 rows inserted means the username is taken. -->
-  <insert id="insert">
-    INSERT INTO users (<include refid="columns"/>)
-    VALUES (#{id}, #{email}, #{pendingEmail}, #{username}, #{passwordHash}, #{fullName},
-            #{birthDate,jdbcType=DATE}, #{avatarKey}, #{plan}, #{savesCount}, #{emailVerifiedAt},
-            #{createdAt}, #{updatedAt})
-    ON CONFLICT DO NOTHING
-  </insert>
-
-  <update id="update">
-    UPDATE users
-    SET password_hash = #{passwordHash},
-        full_name = #{fullName},
-        birth_date = #{birthDate,jdbcType=DATE},
-        plan = #{plan},
-        saves_count = #{savesCount},
-        email_verified_at = #{emailVerifiedAt},
-        updated_at = #{updatedAt}
-    WHERE id = #{id}
-  </update>
+  <!-- Rows come from the profile trigger on auth.users (changeset 012), never from here. -->
 
   <update id="setPendingEmail">
     UPDATE users SET pending_email = #{pendingEmail,jdbcType=VARCHAR}, updated_at = #{at}
@@ -60,11 +41,6 @@
     SELECT EXISTS (SELECT 1 FROM users WHERE pending_email = #{email})
   </select>
 
-  <!-- updated_at stays: it tracks username changes, for the username filter. -->
-  <update id="setPasswordHash">
-    UPDATE users SET password_hash = #{passwordHash} WHERE id = #{id}
-  </update>
-
   <update id="removeEmail">
     UPDATE users
     SET email = NULL, pending_email = NULL, email_verified_at = NULL, updated_at = #{at}
@@ -75,7 +51,7 @@
   <update id="updateProfile">
     UPDATE users
     SET username = #{username}, full_name = #{fullName}, birth_date = #{birthDate,jdbcType=DATE},
-        updated_at = #{at}
+        needs_username = false, updated_at = #{at}
     WHERE id = #{id}
   </update>
 

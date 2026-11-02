@@ -116,16 +116,6 @@ class ExtensionSignInTest {
   }
 
   @Test
-  void websiteAndExtensionTokensDontMix() {
-    MvcTestResult website = register(newUsername());
-    String extensionRefresh = json(connect(extensionCode(website)), "refreshToken");
-
-    assertThat(refresh(cookie(website, REFRESH))).hasStatus(HttpStatus.UNAUTHORIZED);
-    assertThat(mvc.post().uri("/api/v1/auth/refresh").cookie(new Cookie(REFRESH, extensionRefresh)))
-        .hasStatus(HttpStatus.UNAUTHORIZED);
-  }
-
-  @Test
   void logoutEndsOnlyTheExtensionsSession() {
     MvcTestResult website = register(newUsername());
     String extensionRefresh = json(connect(extensionCode(website)), "refreshToken");

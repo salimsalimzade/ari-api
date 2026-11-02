@@ -6,8 +6,8 @@ import app.ari.api.feature.account.domain.model.ResetLink;
 import app.ari.api.feature.account.domain.model.ResetRecipient;
 import app.ari.api.feature.account.domain.model.User;
 import app.ari.api.feature.account.domain.model.Usernames;
+import app.ari.api.feature.account.domain.port.IdentityProvider;
 import app.ari.api.feature.account.domain.repository.PasswordResetCodeRepository;
-import app.ari.api.feature.account.domain.repository.RefreshTokenRepository;
 import app.ari.api.feature.account.domain.repository.UserRepository;
 import app.ari.api.feature.account.domain.service.PasswordResetService;
 import java.nio.charset.StandardCharsets;
@@ -21,7 +21,6 @@ import java.util.HexFormat;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
-import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 /**
@@ -36,8 +35,7 @@ public class PasswordResetServiceImpl implements PasswordResetService {
 
   private final UserRepository users;
   private final PasswordResetCodeRepository codes;
-  private final RefreshTokenRepository refreshTokens;
-  private final PasswordEncoder passwordEncoder;
+  private final IdentityProvider identity;
   private final RateLimiter rateLimiter;
   private final Clock clock;
   private final SecureRandom random = new SecureRandom();
@@ -45,14 +43,12 @@ public class PasswordResetServiceImpl implements PasswordResetService {
   public PasswordResetServiceImpl(
       UserRepository users,
       PasswordResetCodeRepository codes,
-      RefreshTokenRepository refreshTokens,
-      PasswordEncoder passwordEncoder,
+      IdentityProvider identity,
       RateLimiter rateLimiter,
       Clock clock) {
     this.users = users;
     this.codes = codes;
-    this.refreshTokens = refreshTokens;
-    this.passwordEncoder = passwordEncoder;
+    this.identity = identity;
     this.rateLimiter = rateLimiter;
     this.clock = clock;
   }
@@ -115,11 +111,18 @@ public class PasswordResetServiceImpl implements PasswordResetService {
     if (link.status() != ResetLink.Status.VALID) {
       return link;
     }
+    UUID userId = link.user().id();
+    if (identity.setPassword(userId, password) == IdentityProvider.Outcome.WEAK_PASSWORD) {
+      return new ResetLink(ResetLink.Status.WEAK_PASSWORD, null);
+    }
     if (!codes.markUsed(codeHash, KEPT_FOR)) {
       return new ResetLink(ResetLink.Status.USED, null);
     }
-    users.setPasswordHash(link.user().id(), passwordEncoder.encode(password));
-    refreshTokens.revokeAllOfUser(link.user().id(), clock.instant());
+    // Supabase ends every session of a user from one of them: a new one, ended with the rest.
+    identity
+        .email(userId)
+        .flatMap(email -> identity.signIn(email, password))
+        .ifPresent(tokens -> identity.signOut(tokens.accessToken(), true));
     return link;
   }
 

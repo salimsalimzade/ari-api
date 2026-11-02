@@ -3,7 +3,9 @@ package app.ari.api.feature.account.domain.service.impl;
 import app.ari.api.common.ratelimit.RateLimiter;
 import app.ari.api.feature.account.domain.model.EmailCode;
 import app.ari.api.feature.account.domain.model.EmailConfirmation;
+import app.ari.api.feature.account.domain.model.NoEmail;
 import app.ari.api.feature.account.domain.model.User;
+import app.ari.api.feature.account.domain.port.IdentityProvider;
 import app.ari.api.feature.account.domain.repository.EmailCodeRepository;
 import app.ari.api.feature.account.domain.repository.UserRepository;
 import app.ari.api.feature.account.domain.service.EmailService;
@@ -22,6 +24,10 @@ import java.util.UUID;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.stereotype.Service;
 
+/**
+ * A verified email is also the account's sign-in email in Supabase Auth, so a Google account with
+ * the same address signs in to it; without one, Supabase has the placeholder ({@link NoEmail}).
+ */
 @Service
 public class EmailServiceImpl implements EmailService {
 
@@ -30,14 +36,20 @@ public class EmailServiceImpl implements EmailService {
 
   private final UserRepository users;
   private final EmailCodeRepository codes;
+  private final IdentityProvider identity;
   private final RateLimiter rateLimiter;
   private final Clock clock;
   private final SecureRandom random = new SecureRandom();
 
   public EmailServiceImpl(
-      UserRepository users, EmailCodeRepository codes, RateLimiter rateLimiter, Clock clock) {
+      UserRepository users,
+      EmailCodeRepository codes,
+      IdentityProvider identity,
+      RateLimiter rateLimiter,
+      Clock clock) {
     this.users = users;
     this.codes = codes;
+    this.identity = identity;
     this.rateLimiter = rateLimiter;
     this.clock = clock;
   }
@@ -74,30 +86,43 @@ public class EmailServiceImpl implements EmailService {
       return EmailConfirmation.INVALID_CODE;
     }
     EmailCode emailCode = stored.get();
-    boolean stillPending =
-        users
-            .findById(emailCode.userId())
-            .map(User::pendingEmail)
-            .filter(emailCode.email()::equals)
-            .isPresent();
-    if (!stillPending) {
+    Optional<User> user =
+        users.findById(emailCode.userId()).filter(u -> emailCode.email().equals(u.pendingEmail()));
+    if (user.isEmpty()) {
       return EmailConfirmation.INVALID_CODE;
     }
     if (users.isEmailTaken(emailCode.email(), emailCode.userId())) {
       return EmailConfirmation.EMAIL_TAKEN;
     }
-    try {
-      return users.confirmEmail(emailCode.userId(), emailCode.email(), clock.instant())
-          ? EmailConfirmation.CONFIRMED
-          : EmailConfirmation.INVALID_CODE;
-    } catch (DuplicateKeyException e) {
-      return EmailConfirmation.EMAIL_TAKEN; // another account confirmed it a moment ago
+    // Supabase first: a Google user who never had an Ari profile email may already sign in with it.
+    if (identity.setEmail(emailCode.userId(), emailCode.email())
+        == IdentityProvider.Outcome.TAKEN) {
+      return EmailConfirmation.EMAIL_TAKEN;
     }
+    EmailConfirmation result;
+    try {
+      result =
+          users.confirmEmail(emailCode.userId(), emailCode.email(), clock.instant())
+              ? EmailConfirmation.CONFIRMED
+              : EmailConfirmation.INVALID_CODE;
+    } catch (DuplicateKeyException e) {
+      result = EmailConfirmation.EMAIL_TAKEN; // another account confirmed it a moment ago
+    }
+    if (result != EmailConfirmation.CONFIRMED) {
+      identity.setEmail(emailCode.userId(), signInEmail(user.get()));
+    }
+    return result;
   }
 
   @Override
   public void removeEmail(UUID userId) {
+    identity.setEmail(userId, NoEmail.of(userId));
     users.removeEmail(userId, clock.instant());
+  }
+
+  /** The sign-in email Supabase should have for the user: their verified one or the placeholder. */
+  private static String signInEmail(User user) {
+    return user.email() != null ? user.email() : NoEmail.of(user.id());
   }
 
   /** 32 random bytes for the link; only their SHA-256 is stored. */

@@ -1,18 +1,19 @@
 package app.ari.api.feature.account.domain.service;
 
+import app.ari.api.feature.account.domain.model.Registration;
 import app.ari.api.feature.account.domain.model.User;
 import java.time.LocalDate;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Who the users are and how they prove it: passwords. */
+/** Who the users are. Supabase Auth keeps their passwords; the profiles live here. */
 public interface AccountService {
 
-  /** Creates a password user with no plan yet; empty when the username is already taken. */
-  Optional<User> register(String username, String password, String fullName, LocalDate birthDate);
-
-  /** Checks a username and password; empty for every mismatch. */
-  Optional<User> authenticate(String username, String password);
+  /**
+   * Creates a password user with no plan and no email yet: a Supabase user with a placeholder
+   * email, whose profile the database trigger fills in from its metadata.
+   */
+  Registration register(String username, String password, String fullName, LocalDate birthDate);
 
   Optional<User> findById(UUID id);
 

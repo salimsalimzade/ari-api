@@ -33,3 +33,6 @@ databaseChangeLog:
   - include:
       file: v1/011-create-processed-events.yaml
       relativeToChangelogFile: true
+  - include:
+      file: v1/012-move-sign-in-to-supabase.yaml
+      relativeToChangelogFile: true

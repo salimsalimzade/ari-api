@@ -1,0 +1,123 @@
+databaseChangeLog:
+  - changeSet:
+      id: 012-move-sign-in-to-supabase
+      author: ari
+      comment: >-
+        Supabase Auth keeps the passwords, Google identities and sessions in its auth schema, in
+        the same database. A users row is the profile of one auth.users row: same id, created by
+        the trigger below whenever Supabase creates a user, and deleted with it. Needs a database
+        without users rows of its own (a new Supabase database).
+      changes:
+        - dropTable:
+            tableName: refresh_tokens
+        - dropColumn:
+            tableName: users
+            columnName: password_hash
+        # A Google user gets a username made from their email; the website asks them to confirm or
+        # change it (PUT /me clears this).
+        - addColumn:
+            tableName: users
+            columns:
+              - column:
+                  name: needs_username
+                  type: boolean
+                  defaultValueBoolean: false
+                  constraints:
+                    nullable: false
+        - sql:
+            sql: >-
+              ALTER TABLE users ADD CONSTRAINT users_id_fkey
+                FOREIGN KEY (id) REFERENCES auth.users (id) ON DELETE CASCADE
+        # ari-api registers password users through the admin API with their username, full name and
+        # birth date as user metadata, and a placeholder email (<id>@no-email.ari.invalid) until
+        # they verify one of their own. Google users bring their verified email and their name; the
+        # email becomes theirs here unless another account verified it first.
+        - sql:
+            splitStatements: false
+            sql: >-
+              CREATE FUNCTION public.ari_create_profile() RETURNS trigger
+              LANGUAGE plpgsql SECURITY DEFINER SET search_path = ''
+              AS $$
+              DECLARE
+                meta jsonb := coalesce(NEW.raw_user_meta_data, '{}'::jsonb);
+                chosen text := lower(meta ->> 'username');
+                address text := lower(NEW.email);
+                verified text;
+                base text;
+              BEGIN
+                IF coalesce(NEW.raw_app_meta_data ->> 'provider', 'email') <> 'email'
+                    AND address IS NOT NULL
+                    AND address NOT LIKE '%@no-email.ari.invalid'
+                    AND NOT EXISTS (SELECT 1 FROM public.users WHERE email = address) THEN
+                  verified := address;
+                END IF;
+                IF chosen IS NULL THEN
+                  base := left(regexp_replace(
+                    lower(split_part(coalesce(address, ''), '@', 1)), '[^a-z0-9_.]', '', 'g'), 20);
+                  IF length(base) < 3 THEN
+                    base := 'user';
+                  END IF;
+                  chosen := base;
+                  WHILE EXISTS (SELECT 1 FROM public.users WHERE username = chosen) LOOP
+                    chosen := base || '_' || floor(random() * 1000000)::int;
+                  END LOOP;
+                END IF;
+                INSERT INTO public.users (
+                  id, email, username, full_name, birth_date, needs_username, email_verified_at)
+                VALUES (
+                  NEW.id,
+                  verified,
+                  chosen,
+                  left(coalesce(nullif(btrim(meta ->> 'full_name'), ''),
+                                nullif(btrim(meta ->> 'name'), ''), chosen), 150),
+                  (meta ->> 'birth_date')::date,
+                  meta ->> 'username' IS NULL,
+                  CASE WHEN verified IS NOT NULL THEN now() END);
+                RETURN NEW;
+              END
+              $$
+        - sql:
+            sql: >-
+              CREATE TRIGGER ari_create_profile AFTER INSERT ON auth.users
+              FOR EACH ROW EXECUTE FUNCTION public.ari_create_profile()
+        # Supabase's Data API (PostgREST) serves the public schema to anyone with the project's
+        # keys. Only ari-api, connected as the tables' owner, may read them: the API roles get no
+        # grants, now or on later tables, and row-level security without policies is a second lock.
+        - sql:
+            splitStatements: false
+            sql: >-
+              DO $$
+              DECLARE t record;
+              BEGIN
+                FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
+                  EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t.tablename);
+                END LOOP;
+              END
+              $$
+        - sql:
+            sql: >-
+              REVOKE ALL ON ALL TABLES IN SCHEMA public FROM anon, authenticated, service_role;
+              REVOKE ALL ON ALL SEQUENCES IN SCHEMA public FROM anon, authenticated, service_role;
+              REVOKE ALL ON ALL FUNCTIONS IN SCHEMA public
+                FROM PUBLIC, anon, authenticated, service_role;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+                REVOKE ALL ON TABLES FROM anon, authenticated, service_role;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+                REVOKE ALL ON SEQUENCES FROM anon, authenticated, service_role;
+              ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA public
+                REVOKE ALL ON FUNCTIONS FROM PUBLIC, anon, authenticated, service_role
+      rollback:
+        - sql:
+            sql: >-
+              DROP TRIGGER ari_create_profile ON auth.users;
+              DROP FUNCTION public.ari_create_profile();
+              ALTER TABLE users DROP CONSTRAINT users_id_fkey
+        - dropColumn:
+            tableName: users
+            columnName: needs_username
+        - addColumn:
+            tableName: users
+            columns:
+              - column:
+                  name: password_hash
+                  type: varchar(100)

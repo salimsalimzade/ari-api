@@ -1,0 +1,6 @@
+# Shell scripts keep LF line endings whatever core.autocrlf says: /bin/sh can't run a CRLF one
+# ("bad interpreter: /bin/sh^M"), which breaks ./gradlew, the Lefthook hooks and the Docker build.
+gradlew text eol=lf
+*.sh text eol=lf
+# Windows' wrapper script keeps CRLF
+*.bat text eol=crlf

@@ -1,11 +1,12 @@
 # Ari sequences
 
-Last updated 2026-10-14. The `ari` repo keeps its own copy with only the client side; this one also
+Last updated 2026-11-02. The `ari` repo keeps its own copy with only the client side; this one also
 shows the server steps. The sign-in rules and error codes are in [architecture.md](architecture.md);
 the tables, Redis keys and MinIO objects are in [database.md](database.md).
 
 1. [Register or sign in (F1)](#1-register-or-sign-in-f1)
 2. [Token refresh (F1)](#2-token-refresh-f1)
+   1. [Continue with Google (F9)](#21-continue-with-google-f9)
 3. [Server-rendered library page (F2)](#3-server-rendered-library-page-f2)
 4. [Save, change and delete a save (F3)](#4-save-change-and-delete-a-save-f3)
 5. [PDF or Word import (F11)](#5-pdf-or-word-import-f11)
@@ -24,6 +25,7 @@ sequenceDiagram
   participant B as Browser
   participant A as ari-api
   participant R as Redis
+  participant S as Supabase Auth
   participant D as PostgreSQL
   Note over B,D: Typing a username on /register or in Settings › Account (waits 300 ms)
   B->>A: GET /api/v1/auth/username-available?username=Bee.Reader
@@ -38,13 +40,17 @@ sequenceDiagram
   end
   alt Register
     B->>A: POST /api/v1/auth/register (username, password, fullName, birthDate)
-    A->>D: Normalize username, hash password, INSERT users ON CONFLICT DO NOTHING (no row is 409 USERNAME_TAKEN)
-    A->>R: BF.ADD usernames bee.reader, after the commit
+    A->>D: SELECT 1 FROM users WHERE username = 'bee.reader' (a row is 409 USERNAME_TAKEN)
+    A->>S: POST /auth/v1/admin/users (new id, <id>@no-email.ari.invalid, password, confirmed, metadata username, full_name, birth_date)
+    S->>D: INSERT auth.users, the trigger INSERTs users (a taken username fails it: 409)
+    A->>R: BF.ADD usernames bee.reader
   else Sign in
     B->>A: POST /api/v1/auth/login (username, password)
-    A->>D: Find user by username, check password_hash
+    A->>D: Find the user id by username (unknown: still asks Supabase, with an address nobody has)
+    A->>S: GET /auth/v1/admin/users/{id}: its sign-in email (verified, or the placeholder)
   end
-  A->>A: Create JWT (15 min) and refresh token (30 days, store only its hash)
+  A->>S: POST /auth/v1/token?grant_type=password (email, password; Sb-Forwarded-For the browser's address)
+  S-->>A: access token (JWT, 15 min), refresh token (400 for a wrong password: 401 INVALID_CREDENTIALS)
   A-->>B: Me + Set-Cookie ari_access, ari_refresh (httpOnly)
   B->>A: GET /api/v1/highlights (browser sends the cookies)
   A-->>B: 200 OK + data
@@ -60,6 +66,10 @@ sequenceDiagram
   time. The nightly rebuild fills a new key the same way and `RENAME`s it over the old one; a name
   registered during the rebuild may be missing until the next one, which the unique key covers.
 - If Redis is down, the check goes straight to the database.
+- Supabase Auth signs people in by email, and an Ari account needs none: until its user verifies an
+  email, its Supabase user has `<id>@no-email.ari.invalid` (`.invalid` can never receive mail).
+  Verifying an email ([§8](#8-add-and-verify-an-email)) makes it the Supabase user's sign-in email
+  too; removing it puts the placeholder back.
 - The check shows anyone whether a username is taken, as register's 409 already does, so it is
   rate-limited. Login still answers `INVALID_CREDENTIALS` for every failure.
 
@@ -70,29 +80,73 @@ sequenceDiagram
   participant B as Browser
   participant W as ari server
   participant A as ari-api
+  participant S as Supabase Auth
   alt In the browser (lib/api.ts)
     B->>A: GET /api/v1/highlights (ari_access has expired)
     A-->>B: 401 UNAUTHORIZED
     B->>A: POST /api/v1/auth/refresh (ari_refresh cookie)
-    A->>A: Find token by hash, check it is not revoked or expired
-    A->>A: Revoke it, create a new pair with the same family_id
+    A->>S: POST /auth/v1/token?grant_type=refresh_token
+    S-->>A: The session's next pair (Supabase replaces the refresh token)
     A-->>B: 204 + new cookies
     B->>A: Retry GET /api/v1/highlights
     A-->>B: 200 OK + data
   else While rendering a page (middleware)
     B->>W: GET /library (ari_refresh only, the ari_access cookie is gone)
     W->>A: POST /api/v1/auth/refresh (forwards the Cookie header)
-    A->>A: Check, revoke and rotate as above
+    A->>S: Refresh as above
     A-->>W: 204 + Set-Cookie ari_access, ari_refresh
     W->>W: Keep the new cookies in event.locals for this render
     W-->>B: HTML rendered with the new token + the same Set-Cookie headers
   end
-  Note over B,A: Refresh fails: 401, both cookies are cleared, and the user goes to /login.<br/>A replaced token used again within 10 s gets a new pair while its session is alive. Later, it revokes the whole session.
+  Note over B,S: Refresh fails: 401, both cookies are cleared, and the user goes to /login.<br/>Supabase lets a replaced token work for 10 more seconds (two refreshes at once); reused later, it ends the session.
 ```
 
 - In the browser, several 401s at once share one refresh request.
 - The `ari` server refreshes only when `ari_access` is missing. The cookie expires a minute before its
-  JWT, so a cookie the browser still sends is always valid.
+  JWT (its `Max-Age` follows Supabase's `expires_in`), so a cookie the browser still sends is always
+  valid.
+- Logout signs the session out at Supabase (`POST /auth/v1/logout?scope=local` with the access
+  token; when `ari_access` is gone, a refresh first gets one) and clears the cookies.
+
+## 2.1 Continue with Google (F9)
+
+```mermaid
+sequenceDiagram
+  participant B as Browser
+  participant A as ari-api
+  participant S as Supabase Auth
+  participant G as Google
+  participant D as PostgreSQL
+  B->>A: GET /api/v1/auth/google (a link on /login and /register)
+  A-->>B: 302 to Supabase /authorize?provider=google&code_challenge=… + Set-Cookie ari_google (PKCE verifier, 10 min)
+  B->>S: GET /auth/v1/authorize
+  S-->>B: 302 to Google
+  B->>G: Choose an account, agree
+  G-->>B: 302 to Supabase /auth/v1/callback
+  B->>S: GET /auth/v1/callback
+  alt A Supabase user has this verified email
+    S->>S: Link the Google identity to that user
+  else New to Ari
+    S->>D: INSERT auth.users, the trigger INSERTs users (email, name, a username from the email, needs_username)
+  end
+  S-->>B: 302 to ari-api /api/v1/auth/google/callback?code=…
+  B->>A: GET /api/v1/auth/google/callback (ari_google cookie)
+  A->>S: POST /auth/v1/token?grant_type=pkce (code, verifier)
+  S-->>A: access and refresh tokens
+  A-->>B: 302 to /welcome (needs_username) or /library + Set-Cookie ari_access, ari_refresh; ari_google cleared
+  Note over B,A: Anything failed (cancelled, no code, another browser's verifier): 302 to /login?error=google.
+  B->>A: On /welcome: PUT /api/v1/me (username, fullName, birthDate) clears needs_username
+```
+
+- The verifier stays in an httpOnly cookie that only `/api/v1/auth/google` receives, so only the
+  browser that started the sign-in can finish it.
+- The username the trigger makes is the email's name (letters, digits, `_` and `.`, at most 20),
+  with `_` and a number when taken. The signed-in pages send the user to `/welcome` until they
+  confirm or change it.
+- A Google account whose email an Ari account verified signs in to that account (Supabase links
+  verified emails). A Google user has no password; a password reset to their email gives them one.
+- Supabase's allow list must hold the callback (`additional_redirect_urls` in
+  `supabase/config.toml`; Authentication, URL Configuration on a hosted project).
 
 ## 3. Server-rendered library page (F2)
 
@@ -287,6 +341,7 @@ sequenceDiagram
   participant T as Website tab
   participant A as ari-api
   participant R as Redis
+  participant S as Supabase Auth
   Note over X,R: Connect, on any signed-in page of the website
   T->>X: postMessage signed-in (the user's id)
   X->>T: postMessage want-code (not signed in as that user)
@@ -299,12 +354,14 @@ sequenceDiagram
   alt Missing, expired or used
     A-->>X: 401 INVALID_CODE
   else Found
-    A->>A: Create JWT and refresh token (client EXTENSION)
+    A->>S: POST /auth/v1/admin/generate_link (magiclink for the user's sign-in email; nothing is emailed)
+    A->>S: POST /auth/v1/verify (its hashed_token): a Supabase session of the extension's own
     A-->>X: 200 accessToken, refreshToken
     X->>X: Keep the tokens in browser.storage.local
   end
   Note over X,R: Or another account, on the website's /extension/sign-in
   T->>A: POST /api/v1/auth/extension/code (username, password; no cookies change)
+  A->>S: Check the password with a sign-in, then sign that session out
   A-->>T: 200 with the code, or 401 INVALID_CREDENTIALS
   T->>X: postMessage account-code
   X->>A: POST /api/v1/auth/extension/token (code), as above
@@ -315,10 +372,12 @@ sequenceDiagram
   A-->>X: 201 SaveResponse
   Note over X,R: Access token expired
   X->>A: POST /api/v1/auth/extension/refresh (refreshToken)
-  A-->>X: 200 new pair (same rotation rules as the cookies)
+  A->>S: Refresh, as for the cookies
+  A-->>X: 200 new pair
   Note over X,R: Log out on the website (while it follows it), or in the extension
   T->>X: postMessage signed-out
   X->>A: POST /api/v1/auth/extension/logout (refreshToken)
+  A->>S: Refresh for an access token, then POST /auth/v1/logout?scope=local
   A-->>X: 204, the extension's session ends
 ```
 
@@ -331,10 +390,9 @@ sequenceDiagram
   when the website logs out in the same browser. On the website's `/extension/sign-in` it can sign
   in as any account with a password instead (`POST /auth/extension/code` sets no cookies, and the
   website stays as it is); it keeps that account, whatever the website does, until it logs out.
-- The extension's session is its own: the website's cookies may expire while it stays signed in.
-  Each refresh gives it 30 more days. Refresh tokens are checked against their client: the cookie refresh
-  takes only `WEB` tokens, the extension's refresh only `EXTENSION` ones, and its 401 clears no
-  cookies.
+- The extension's session is its own Supabase session: the website's cookies may expire while it
+  stays signed in, and either logs out alone. Supabase doesn't tell the two apart, so a refresh
+  token works on either refresh endpoint; the extension's 401 clears no cookies.
 - `ari-api` reads the `ari_access` cookie first, then the `Authorization` header, so every endpoint
   works for the extension. The extension sends no cookies (`credentials: 'omit'`), so its token is
   the one read.
@@ -396,6 +454,7 @@ sequenceDiagram
 sequenceDiagram
   participant B as Browser on Settings › Account
   participant A as ari-api
+  participant S as Supabase Auth
   participant R as Redis
   participant D as PostgreSQL
   participant Q as RabbitMQ
@@ -425,6 +484,7 @@ sequenceDiagram
   else Another account verified this address first
     A-->>B: 409 EMAIL_TAKEN
   else Found
+    A->>S: PUT /auth/v1/admin/users/{id} (email, confirmed): its sign-in email too; a Supabase user who has it is 409 EMAIL_TAKEN
     A->>D: UPDATE users SET email = pending_email, pending_email null, email_verified_at
     A-->>B: 204, the email shows as verified
   end
@@ -596,6 +656,7 @@ sequenceDiagram
 sequenceDiagram
   participant B as Browser on /forgot-password
   participant A as ari-api
+  participant S as Supabase Auth
   participant R as Redis
   participant D as PostgreSQL
   participant M as Mail sender
@@ -621,8 +682,9 @@ sequenceDiagram
   A->>R: GET the code, EXISTS its used key
   A-->>P: 200 username, or 401 INVALID_CODE, 410 CODE_EXPIRED or CODE_USED
   P->>A: POST /api/v1/auth/password-reset/confirm (code, password)
+  A->>S: PUT /auth/v1/admin/users/{id} (password); Supabase's rules may answer 400 WEAK_PASSWORD
   A->>R: SET NX code:password-reset-used:{SHA-256}; already there is 410 CODE_USED
-  A->>D: UPDATE users SET password_hash; revoke every refresh token of the user
+  A->>S: Sign in with the new password, then POST /auth/v1/logout?scope=global: every session ends
   A-->>P: 204
 ```
 

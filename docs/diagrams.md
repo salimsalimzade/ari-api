@@ -95,7 +95,7 @@ sequenceDiagram
     A->>R: BF.ADD usernames bee.reader, after the commit
   else Sign in
     B->>A: POST /api/v1/auth/login (username, password)
-    A->>D: Find user by username, check password_hash
+    A->>D: Find user by username; Supabase Auth checks the password
   end
   A->>A: Create JWT (15 min) and refresh token (30 days, store only its hash)
   A-->>B: Me + Set-Cookie ari_access, ari_refresh (httpOnly)
@@ -400,7 +400,7 @@ sequenceDiagram
 title: "All tables"
 ---
 erDiagram
-  users ||--o{ refresh_tokens : "signs in with"
+  auth_users ||--|| users : "has the profile"
   users ||--o| subscriptions : "pays with"
   users ||--o{ invoices : "is billed"
   users ||--o{ sources : reads
@@ -418,11 +418,11 @@ erDiagram
   saves |o--o{ note_blocks : "quoted in"
 
   users {
-    uuid id PK
+    uuid id PK, FK "auth.users.id, on delete cascade"
     varchar email UK "verified address only, stored lowercase"
     varchar pending_email "waiting for its link, not unique"
     varchar username UK "stored lowercase, 3-30 chars"
-    varchar password_hash "bcrypt"
+    boolean needs_username "a Google user who hasn't confirmed the one made for them"
     varchar full_name
     date birth_date
     varchar avatar_key "profile photo in MinIO, null shows the initial"
@@ -432,15 +432,12 @@ erDiagram
     timestamptz created_at
     timestamptz updated_at
   }
-  refresh_tokens {
+  auth_users {
     uuid id PK
-    uuid user_id FK
-    varchar token_hash UK "SHA-256, never the token"
-    uuid family_id "chain of rotated tokens"
-    varchar client "WEB or EXTENSION"
-    timestamptz expires_at
-    timestamptz revoked_at "null while valid"
-    timestamptz created_at
+    varchar email UK "sign-in email: the verified one, or <id>@no-email.ari.invalid"
+    varchar encrypted_password "bcrypt, null for Google-only users"
+    jsonb raw_user_meta_data "username, full_name, birth_date from ari-api; name from Google"
+    jsonb raw_app_meta_data "provider: email or google"
   }
   subscriptions {
     uuid id PK

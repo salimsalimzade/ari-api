@@ -99,3 +99,24 @@ tasks.named('test') {
 tasks.named('bootRun') {
   systemProperty 'spring.profiles.active', 'dev'
 }
+
+// Applies the Liquibase changesets to a database without starting the API: the deploy workflow
+// runs it against the hosted Supabase project. It is the same Liquibase and changelog as at
+// startup, so the API finds them applied. Liquibase reads the connection from
+// LIQUIBASE_COMMAND_URL, LIQUIBASE_COMMAND_USERNAME and LIQUIBASE_COMMAND_PASSWORD.
+// Liquibase's command line needs picocli, which liquibase-core leaves optional; only `migrate` gets it.
+configurations {
+  liquibaseCli
+}
+
+dependencies {
+  liquibaseCli 'info.picocli:picocli:4.7.7'
+}
+
+tasks.register('migrate', JavaExec) {
+  group = 'database'
+  description = 'Applies the Liquibase changesets to the database in LIQUIBASE_COMMAND_URL'
+  classpath = sourceSets.main.runtimeClasspath + configurations.liquibaseCli
+  mainClass = 'liquibase.integration.commandline.LiquibaseCommandLine'
+  args 'update', '--changelog-file=db/changelog/db.changelog-master.yaml'
+}

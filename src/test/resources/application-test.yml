@@ -8,4 +8,7 @@ spring:
 app:
   seed-demo-data: true
   auth:
-    jwt-secret: test-only-jwt-secret-never-used-outside-tests
+    # Supabase Auth is FakeSupabaseAuth in the tests; nothing calls this address
+    supabase-url: http://supabase.test
+    supabase-secret-key: sb_secret_test-only
+    api-url: http://localhost:8080

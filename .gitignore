@@ -10,8 +10,9 @@ build/
 *.iws
 out/
 
-# VS Code
+# VS Code (its Java extension compiles into bin/)
 .vscode/
+bin/
 
 # OS
 .DS_Store

@@ -3,8 +3,9 @@ spring:
     virtual:
       enabled: true
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/ari}
-    username: ${DB_USERNAME:ari}
+    # Supabase's database: `supabase start` serves it on 54322 (user and password postgres)
+    url: ${DB_URL:jdbc:postgresql://127.0.0.1:54322/postgres}
+    username: ${DB_USERNAME:postgres}
     password: ${DB_PASSWORD}
   data:
     redis:
@@ -76,6 +77,11 @@ app:
   # Adds the demo user (demo / demo1234). Local development only.
   seed-demo-data: ${APP_SEED_DEMO_DATA:false}
   auth:
-    jwt-secret: ${APP_JWT_SECRET}
+    # Supabase Auth: `supabase start` serves it on 54321 and prints the secret key
+    supabase-url: ${SUPABASE_URL:http://127.0.0.1:54321}
+    supabase-public-url: ${SUPABASE_PUBLIC_URL:}
+    supabase-secret-key: ${SUPABASE_SECRET_KEY}
+    # ari-api as browsers reach it, for Google's way back
+    api-url: ${APP_API_URL:http://localhost:8080}
     cookie-secure: ${APP_COOKIE_SECURE:true}
     cookie-domain: ${APP_COOKIE_DOMAIN:}

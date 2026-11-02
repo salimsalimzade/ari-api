@@ -7,18 +7,16 @@ import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 
-/** Stores users. */
+/**
+ * Stores users: the profiles of Supabase Auth's users. Rows are created by the database's profile
+ * trigger whenever Supabase creates a user, and deleted with it, never here.
+ */
 public interface UserRepository {
 
   Optional<User> findById(UUID id);
 
   /** Looks up a normalized (trimmed, lowercase) username. */
   Optional<User> findByUsername(String username);
-
-  /** Adds the user; returns false and changes nothing when the username is already taken. */
-  boolean insert(User user);
-
-  void update(User user);
 
   /** Sets or clears the email that waits for its verify link. */
   void setPendingEmail(UUID id, String pendingEmail, Instant at);
@@ -38,15 +36,12 @@ public interface UserRepository {
   /** True when an account waits for this email's verify link (lowercase). */
   boolean isPendingEmail(String email);
 
-  /** Sets the password's hash. */
-  void setPasswordHash(UUID id, String passwordHash);
-
   /** Clears the verified and the pending email. */
   void removeEmail(UUID id, Instant at);
 
   /**
-   * Sets the profile fields; {@code username} is normalized. Throws {@code DuplicateKeyException}
-   * when another account has the username.
+   * Sets the profile fields, which confirms the username; {@code username} is normalized. Throws
+   * {@code DuplicateKeyException} when another account has the username.
    */
   void updateProfile(UUID id, String username, String fullName, LocalDate birthDate, Instant at);
 

@@ -42,10 +42,10 @@ import org.springframework.web.multipart.MultipartFile;
 @Tag(
     name = "Account",
     description =
-        "Sign-in and the signed-in user. Signing in sets two httpOnly cookies: ari_access (JWT, 15"
-            + " minutes) and ari_refresh (30 days, replaced on every refresh). The browser"
-            + " extension has a session of its own: its tokens travel as JSON and Authorization:"
-            + " Bearer, never as cookies.")
+        "Sign-in and the signed-in user. Supabase Auth keeps the accounts and sessions; signing"
+            + " in sets two httpOnly cookies: ari_access (Supabase's JWT, 15 minutes) and"
+            + " ari_refresh (replaced on every refresh). The browser extension has a session of"
+            + " its own: its tokens travel as JSON and Authorization: Bearer, never as cookies.")
 @RequestMapping("/api/v1")
 public interface AccountController {
 
@@ -55,7 +55,9 @@ public interface AccountController {
   @Operation(summary = "Register with username and password, and sign in")
   @SecurityRequirements
   @ApiResponse(responseCode = "201", description = "Registered; both cookies are set")
-  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @ApiResponse(
+      responseCode = "400",
+      description = "VALIDATION_FAILED; WEAK_PASSWORD: Supabase's password rules")
   @ApiResponse(responseCode = "409", description = "USERNAME_TAKEN")
   @PostMapping("/auth/register")
   ResponseEntity<MeResponse> register(@Valid @RequestBody RegisterRequest request);
@@ -86,6 +88,7 @@ public interface AccountController {
   @SecurityRequirements
   @ApiResponse(responseCode = "200", description = "Signed in; both cookies are set")
   @ApiResponse(responseCode = "401", description = "INVALID_CREDENTIALS")
+  @ApiResponse(responseCode = "429", description = "RATE_LIMITED: Supabase's sign-in limits")
   @PostMapping("/auth/login")
   ResponseEntity<MeResponse> login(@Valid @RequestBody LoginRequest request);
 
@@ -105,8 +108,37 @@ public interface AccountController {
   @ApiResponse(responseCode = "204", description = "Signed out")
   @PostMapping("/auth/logout")
   ResponseEntity<Void> logout(
+      @Parameter(hidden = true) @CookieValue(name = AuthCookies.ACCESS, required = false)
+          String accessToken,
       @Parameter(hidden = true) @CookieValue(name = AuthCookies.REFRESH, required = false)
           String refreshToken);
+
+  @Operation(
+      summary = "Sign in with Google",
+      description =
+          "Open it in the browser (a link, not fetch): it goes to Google through Supabase Auth,"
+              + " which comes back to /auth/google/callback. Sets the ari_google cookie (the PKCE"
+              + " verifier, 10 minutes) for the way back.")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "302", description = "To Google")
+  @GetMapping("/auth/google")
+  ResponseEntity<Void> googleSignIn();
+
+  @Operation(
+      summary = "Where Google comes back to",
+      description =
+          "Swaps Supabase's code and the ari_google verifier for a session and sets both"
+              + " cookies, then goes to the website: /library, /welcome for a new Google user (to"
+              + " choose a username) or /login?error=google when it failed. A Google account with"
+              + " the verified email of an existing account signs in to that account.")
+  @SecurityRequirements
+  @ApiResponse(responseCode = "302", description = "To the website")
+  @GetMapping("/auth/google/callback")
+  ResponseEntity<Void> googleCallback(
+      @Parameter(description = "Supabase's one-time code") @RequestParam(required = false)
+          String code,
+      @Parameter(hidden = true) @CookieValue(name = AuthCookies.GOOGLE_VERIFIER, required = false)
+          String codeVerifier);
 
   @Operation(
       summary = "A code that signs the browser extension in",
@@ -266,7 +298,9 @@ public interface AccountController {
               + " extension's; the user signs in again with the new password.")
   @SecurityRequirements
   @ApiResponse(responseCode = "204", description = "The password is changed")
-  @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
+  @ApiResponse(
+      responseCode = "400",
+      description = "VALIDATION_FAILED; WEAK_PASSWORD: Supabase's password rules")
   @ApiResponse(responseCode = "401", description = "INVALID_CODE: an unknown link")
   @ApiResponse(
       responseCode = "410",
@@ -274,7 +308,9 @@ public interface AccountController {
   @PostMapping("/auth/password-reset/confirm")
   ResponseEntity<Void> resetPassword(@Valid @RequestBody PasswordResetConfirmRequest request);
 
-  @Operation(summary = "Change the full name, username and date of birth")
+  @Operation(
+      summary = "Change the full name, username and date of birth",
+      description = "Also confirms a Google user's username: needsUsername becomes false.")
   @ApiResponse(responseCode = "200", description = "The updated user")
   @ApiResponse(responseCode = "400", description = "VALIDATION_FAILED")
   @ApiResponse(responseCode = "401", description = "UNAUTHORIZED")

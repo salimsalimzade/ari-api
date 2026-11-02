@@ -39,6 +39,7 @@ class AccountControllerTest {
     assertThat(result).bodyJson().extractingPath("$.username").isEqualTo(username);
     assertThat(result).bodyJson().doesNotHavePath("$.email");
     assertThat(result).bodyJson().extractingPath("$.plan").isEqualTo("NONE");
+    assertThat(result).bodyJson().extractingPath("$.needsUsername").isEqualTo(false);
     assertThat(result)
         .cookies()
         .isHttpOnly(ACCESS, true)
@@ -224,23 +225,14 @@ class AccountControllerTest {
   }
 
   @Test
-  void aReplacedRefreshTokenWorksForTenSecondsThenEndsTheSession() {
+  void aReplacedRefreshTokenNoLongerWorks() {
     String first = cookie(register(newUsername(), PASSWORD), REFRESH);
     String second = cookie(refresh(first), REFRESH);
 
-    clock.advance(Duration.ofSeconds(5));
-    MvcTestResult withinGrace = refresh(first);
-    assertThat(withinGrace).hasStatus(HttpStatus.NO_CONTENT);
-    String third = cookie(withinGrace, REFRESH);
-
-    clock.advance(Duration.ofSeconds(6));
     MvcTestResult reused = refresh(first);
     assertThat(reused).hasStatus(HttpStatus.UNAUTHORIZED);
     assertThat(reused).cookies().hasMaxAge(ACCESS, Duration.ZERO).hasMaxAge(REFRESH, Duration.ZERO);
-
-    // Reuse revoked the whole session, including the tokens issued after the first one.
-    assertThat(refresh(second)).hasStatus(HttpStatus.UNAUTHORIZED);
-    assertThat(refresh(third)).hasStatus(HttpStatus.UNAUTHORIZED);
+    assertThat(refresh(second)).hasStatus(HttpStatus.NO_CONTENT);
   }
 
   @Test
@@ -266,6 +258,20 @@ class AccountControllerTest {
         .hasMaxAge(ACCESS, Duration.ZERO)
         .hasMaxAge(REFRESH, Duration.ZERO)
         .hasMaxAge(ACCESS_FRESH, Duration.ZERO);
+    assertThat(refresh(refreshToken)).hasStatus(HttpStatus.UNAUTHORIZED);
+  }
+
+  @Test
+  void logoutEndsTheSessionOfTheAccessCookieToo() {
+    MvcTestResult signedIn = register(newUsername(), PASSWORD);
+    String refreshToken = cookie(signedIn, REFRESH);
+
+    assertThat(
+            mvc.post()
+                .uri("/api/v1/auth/logout")
+                .cookie(new Cookie(ACCESS, cookie(signedIn, ACCESS)))
+                .exchange())
+        .hasStatus(HttpStatus.NO_CONTENT);
     assertThat(refresh(refreshToken)).hasStatus(HttpStatus.UNAUTHORIZED);
   }
 

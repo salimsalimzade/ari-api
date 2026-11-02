@@ -1,11 +1,16 @@
 package app.ari.api.support;
 
+import app.ari.api.config.AuthProperties;
+import app.ari.api.config.SecurityConfig;
 import java.time.Instant;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.boot.testcontainers.service.connection.ServiceConnection;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Primary;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.security.oauth2.jwt.JwtDecoder;
+import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.test.context.DynamicPropertyRegistrar;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.MinIOContainer;
@@ -14,7 +19,8 @@ import org.testcontainers.rabbitmq.RabbitMQContainer;
 import org.testcontainers.utility.DockerImageName;
 
 /**
- * A real PostgreSQL, Redis, RabbitMQ, Mailpit and MinIO (Docker must be running) and a clock the
+ * A real PostgreSQL (Supabase's image, with its auth schema), Redis, RabbitMQ, Mailpit and MinIO
+ * (Docker must be running), Supabase Auth in memory ({@link FakeSupabaseAuth}) and a clock the
  * tests control.
  */
 @TestConfiguration(proxyBeanMethods = false)
@@ -23,10 +29,37 @@ public class IntegrationTestConfiguration {
   public static final int MAILPIT_SMTP = 1025;
   public static final int MAILPIT_API = 8025;
 
+  /**
+   * The image `supabase start` runs (supabase/config.toml's major version): auth.users is there for
+   * the profile trigger and the foreign key. Its superuser is supabase_admin, and its settings live
+   * in /etc/postgresql, so the command keeps them.
+   */
   @Bean
   @ServiceConnection
   public PostgreSQLContainer postgres() {
-    return new PostgreSQLContainer("postgres:18");
+    return new PostgreSQLContainer(
+            DockerImageName.parse("public.ecr.aws/supabase/postgres:17.11.0.006")
+                .asCompatibleSubstituteFor("postgres"))
+        .withUsername("supabase_admin")
+        .withDatabaseName("postgres")
+        .withCommand("postgres", "-D", "/etc/postgresql", "-c", "fsync=off");
+  }
+
+  @Bean
+  @Primary
+  public FakeSupabaseAuth fakeSupabaseAuth(
+      JdbcTemplate jdbc, MutableClock clock, AuthProperties properties) {
+    return new FakeSupabaseAuth(jdbc, clock, properties.publicAuthUrl());
+  }
+
+  /** Trusts the fake's key, with the same checks as the real decoder. */
+  @Bean
+  @Primary
+  public JwtDecoder testJwtDecoder(
+      FakeSupabaseAuth auth, MutableClock clock, AuthProperties properties) {
+    NimbusJwtDecoder decoder = NimbusJwtDecoder.withPublicKey(auth.publicKey()).build();
+    decoder.setJwtValidator(SecurityConfig.tokenValidator(properties.publicAuthUrl(), clock));
+    return decoder;
   }
 
   /** A plain container, so Boot needs the name to know it is Redis. */

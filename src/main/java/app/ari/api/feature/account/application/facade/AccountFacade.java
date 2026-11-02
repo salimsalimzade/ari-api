@@ -13,6 +13,8 @@ import app.ari.api.feature.account.application.model.request.VerifyEmailRequest;
 import app.ari.api.feature.account.application.model.response.AuthTokens;
 import app.ari.api.feature.account.application.model.response.ExtensionCodeResponse;
 import app.ari.api.feature.account.application.model.response.ExtensionTokensResponse;
+import app.ari.api.feature.account.application.model.response.GoogleSignInResult;
+import app.ari.api.feature.account.application.model.response.GoogleSignInStart;
 import app.ari.api.feature.account.application.model.response.MeResponse;
 import app.ari.api.feature.account.application.model.response.PasswordResetCheckResponse;
 import app.ari.api.feature.account.application.model.response.SignedIn;
@@ -22,7 +24,10 @@ import java.util.UUID;
 /** Sign-in use cases and the signed-in user. Other features use only this facade. */
 public interface AccountFacade {
 
-  /** Creates a password account and signs it in; throws {@code UsernameTakenException}. */
+  /**
+   * Creates a password account and signs it in; throws {@code UsernameTakenException} or {@code
+   * WeakPasswordException}.
+   */
   SignedIn register(RegisterRequest request);
 
   /** Throws {@code InvalidCredentialsException} for every mismatch. */
@@ -31,8 +36,20 @@ public interface AccountFacade {
   /** Throws {@code SessionExpiredException} when the token is missing, unknown or used up. */
   AuthTokens refresh(String refreshToken);
 
-  /** Ends the session; a missing or unknown token is ignored. */
-  void logout(String refreshToken);
+  /**
+   * Ends the session of the access token, or of the refresh token when the access token is gone;
+   * missing or unknown tokens are ignored.
+   */
+  void logout(String accessToken, String refreshToken);
+
+  /** Where to send the browser to sign in with Google, and the verifier it must keep. */
+  GoogleSignInStart startGoogleSignIn();
+
+  /**
+   * Finishes a Google sign-in with the code Google sent back and the browser's verifier. A new
+   * Google user gets an account (the profile trigger makes it) and goes to the welcome page.
+   */
+  GoogleSignInResult finishGoogleSignIn(String authCode, String codeVerifier);
 
   /**
    * A one-time code for the signed-in website to hand to the browser extension (F13); throws {@code
@@ -94,11 +111,14 @@ public interface AccountFacade {
 
   /**
    * Sets the new password, uses the link up and ends every session of the account; throws what
-   * {@link #checkPasswordReset} throws.
+   * {@link #checkPasswordReset} throws, or {@code WeakPasswordException}.
    */
   void resetPassword(PasswordResetConfirmRequest request);
 
-  /** Changes the full name, username and date of birth; throws {@code UsernameTakenException}. */
+  /**
+   * Changes the full name, username and date of birth, which confirms a Google user's username;
+   * throws {@code UsernameTakenException}.
+   */
   MeResponse updateProfile(UUID userId, ProfileRequest request);
 
   /**

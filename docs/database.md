@@ -1,10 +1,11 @@
 # Ari database
 
-Last updated 2026-10-14. PostgreSQL 18 (`docker compose up -d postgres`), migrations with Liquibase,
+Last updated 2026-11-02. Supabase's PostgreSQL 17 (`supabase start`, or a hosted project), migrations with Liquibase,
 queries with MyBatis. The tables follow what the ari frontend shows: the Library, Sources, Imports,
 Notes and Settings pages; Imports and Settings run on sample data in the page until their tables
 exist. The
-sign-in tables (`users`, `refresh_tokens`) exist since F1; every other table arrives with the
+profile table (`users`) exists since F1, and Supabase Auth keeps the accounts' passwords and
+sessions in its `auth` schema of the same database; every other table arrives with the
 feature that first uses it. The flows that use these tables are in [sequences.md](sequences.md),
 and every table with all its columns is in one diagram in [database-erd.md](database-erd.md).
 
@@ -14,7 +15,7 @@ and every table with all its columns is in one diagram in [database-erd.md](data
 
 ```mermaid
 erDiagram
-  users ||--o{ refresh_tokens : "signs in with"
+  auth_users ||--|| users : "has the profile"
   users ||--o| subscriptions : "pays with"
   users ||--o{ invoices : "is billed"
   users ||--o{ sources : reads
@@ -39,7 +40,7 @@ Where each screen of the frontend gets its data:
 
 | Screen (ari) | Tables |
 |---|---|
-| Register, log in, the user in the sidebar | `users`, `refresh_tokens`; the username check asks the Redis Bloom filter first |
+| Register, log in, the user in the sidebar | `users`, and Supabase Auth's `auth.users` and sessions; the username check asks the Redis Bloom filter first |
 | Settings › Account: photo, profile, email | `users` (`avatar_key`, `email`, `pending_email`); the email's verify code lives in Redis |
 | Settings › Plan and billing | `subscriptions`, `invoices`; upload space is summed from `imports` |
 | Library: list, grid, type tabs, tag / color / source filters, reading view | `saves`, `sources`, `tags`, `save_tags` |
@@ -54,15 +55,22 @@ Where each screen of the frontend gets its data:
 
 ```mermaid
 erDiagram
-  users ||--o{ refresh_tokens : "signs in with"
+  auth_users ||--|| users : "has the profile"
   users ||--o| subscriptions : "pays with"
   users ||--o{ invoices : "is billed"
-  users {
+  auth_users {
     uuid id PK
+    varchar email UK "sign-in email: the verified one, or <id>@no-email.ari.invalid"
+    varchar encrypted_password "bcrypt, null for Google-only users"
+    jsonb raw_user_meta_data "username, full_name, birth_date from ari-api; name from Google"
+    jsonb raw_app_meta_data "provider: email or google"
+  }
+  users {
+    uuid id PK, FK "auth.users.id, on delete cascade"
     varchar email UK "verified address only, stored lowercase"
     varchar pending_email "waiting for its link, not unique"
     varchar username UK "stored lowercase, 3-30 chars"
-    varchar password_hash "bcrypt"
+    boolean needs_username "a Google user who hasn't confirmed the one made for them"
     varchar full_name
     date birth_date
     varchar avatar_key "profile photo in MinIO, null shows the initial"
@@ -71,16 +79,6 @@ erDiagram
     timestamptz email_verified_at "when email was verified"
     timestamptz created_at
     timestamptz updated_at
-  }
-  refresh_tokens {
-    uuid id PK
-    uuid user_id FK
-    varchar token_hash UK "SHA-256, never the token"
-    uuid family_id "chain of rotated tokens"
-    varchar client "WEB or EXTENSION"
-    timestamptz expires_at
-    timestamptz revoked_at "null while valid"
-    timestamptz created_at
   }
   subscriptions {
     uuid id PK
@@ -111,6 +109,16 @@ erDiagram
   }
 ```
 
+- `auth_users` is Supabase Auth's `auth.users` (its other columns and tables, such as sessions,
+  refresh tokens and identities, are Supabase's own). Supabase writes it; `ari-api` changes it only
+  through Supabase's admin API, never with SQL.
+- Every new `auth.users` row gets its `users` row from the `ari_create_profile` trigger (changeset
+  012), in Supabase's own transaction: a password user's username, name and birth date come from
+  the metadata `ari-api` sent; a Google user's email (unless another account verified it) and
+  name come from Google, with a username made from the email and `needs_username` set.
+- Supabase's Data API (PostgREST) serves the `public` schema to anyone with the project's keys, so
+  the API roles (`anon`, `authenticated`, `service_role`) have no grants on any of these tables, by
+  default on new ones too, and every table has row-level security on without policies.
 - The Plan and billing section's states come from `subscriptions` (section 3).
 - `invoices` holds one row per Paddle transaction, for the invoice list and the "payment didn't go
   through" notice. The invoice PDF is fetched from Paddle when asked for, not stored.
@@ -306,8 +314,7 @@ All ids are UUIDs created in code. All times are `timestamptz` in UTC, and `crea
 
 | Table | Column details and constraints |
 |---|---|
-| `users` | `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `email varchar(320)` nullable, a verified address only, stored lowercase, unique (several users may have none). `pending_email varchar(320)` nullable, not unique, so nobody can block an address by adding it and never confirming it. `password_hash varchar(100)` nullable. `full_name varchar(150)`. `birth_date date` nullable. `avatar_key varchar(512)` nullable. `plan varchar(10)` default `NONE`, check `NONE`/`HIVE`. `saves_count int` default 0, check `>= 0`, changed in the same transaction as every save insert and delete |
-| `refresh_tokens` | `token_hash varchar(64)` unique. `client varchar(20)`, check `WEB`/`EXTENSION`. Indexes on `user_id` and `family_id`. The 10-second reuse grace counts from `revoked_at` and applies only while the family still has an active token |
+| `users` | `username varchar(30)` unique, lowercase, check `[a-z0-9_.]{3,30}`. `email varchar(320)` nullable, a verified address only, stored lowercase, unique (several users may have none). `pending_email varchar(320)` nullable, not unique, so nobody can block an address by adding it and never confirming it. `id` references `auth.users(id)` on delete cascade. `needs_username boolean` default false. `full_name varchar(150)`. `birth_date date` nullable. `avatar_key varchar(512)` nullable. `plan varchar(10)` default `NONE`, check `NONE`/`HIVE`. `saves_count int` default 0, check `>= 0`, changed in the same transaction as every save insert and delete |
 | `subscriptions` | `user_id` unique. `paddle_customer_id varchar(50)`, `paddle_subscription_id varchar(50)` unique, `status varchar(20)`, `price_id varchar(50)`. `billing_period varchar(10)`, check `MONTHLY`/`YEARLY`. `card_last4 varchar(4)`, `card_expiry varchar(5)` |
 | `invoices` | `paddle_transaction_id varchar(50)` unique. `status varchar(10)`, check `PAID`/`FAILED`. `amount_cents int`, check `>= 0`. `currency varchar(3)`. Index `(user_id, billed_at desc)` |
 | `sources` | `kind varchar(10)`, check `WEBSITE`/`FILE`. `name varchar(255)`, `title varchar(500)`, `author varchar(255)` nullable. `url text`, required for `WEBSITE` and null for `FILE` (check). Unique `(user_id, url)` where `kind = 'WEBSITE'`. Index on `user_id` |
@@ -367,7 +374,7 @@ file; add a new one instead.
 | File | Feature |
 |---|---|
 | `001-create-users.yaml` | F1 (done): every `users` column, including `pending_email`, `avatar_key` and `plan` |
-| `002-create-refresh-tokens.yaml` | F1 (done) |
+| `002-create-refresh-tokens.yaml` | F1 (done); dropped by 012 |
 | `003-create-outbox-events.yaml` | Email verification, the first background job |
 | `004-create-sources.yaml` | F2 |
 | `005-create-saves.yaml` | F2, F3 |
@@ -377,7 +384,8 @@ file; add a new one instead.
 | `009-add-note-search.yaml` | F10 for notes: `notes.body` (backfilled from the paragraphs), its `search_vector` and indexes |
 | `010-create-imports.yaml` | F5 (`imports` and `import_marks`) |
 | `011-create-processed-events.yaml` | F11 |
-| `012-create-subscriptions-and-invoices.yaml` | F15 |
+| `012-move-sign-in-to-supabase.yaml` | Supabase Auth: drops `refresh_tokens` and `users.password_hash`, adds `needs_username`, the foreign key to `auth.users`, the profile trigger, and the Data API lockdown |
+| `013-create-subscriptions-and-invoices.yaml` | F15 |
 
 ## 5. Redis and MinIO
 

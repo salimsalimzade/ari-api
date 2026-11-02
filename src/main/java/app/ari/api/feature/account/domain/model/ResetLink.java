@@ -10,6 +10,8 @@ public record ResetLink(Status status, User user) {
     /** It changed a password already. */
     USED,
     /** Unknown, or so old it was forgotten. */
-    INVALID
+    INVALID,
+    /** The link works, but Supabase's password rules refused the new password; nothing changed. */
+    WEAK_PASSWORD
   }
 }

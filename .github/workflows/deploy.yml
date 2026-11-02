@@ -1,0 +1,97 @@
+name: deploy
+
+# Production's Supabase project: the database schema (Liquibase) and Supabase Auth's settings
+# (supabase/config.toml). Runs after `ci` passes on main, or by hand (Actions, deploy, Run
+# workflow). Hosting the API and the website joins this workflow once it is chosen.
+#
+# The `production` environment (Settings, Environments) holds:
+#   variables: SUPABASE_PROJECT_REF, ARI_WEB_URL (https://ari.example), ARI_API_URL
+#     (https://api.ari.example)
+#   secrets: SUPABASE_ACCESS_TOKEN, SUPABASE_DB_URL, SUPABASE_DB_USERNAME, SUPABASE_DB_PASSWORD,
+#     SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID, SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET
+# docs/architecture.md, section 6, says where each comes from.
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One deploy at a time, and a newer one waits instead of cancelling a deploy halfway.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  database:
+    name: Database migrations
+    # A manual run, or a ci run that passed on a push to main (never one of a pull request).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push')
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout the commit ci tested
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      - name: Set up GraalVM 25
+        uses: graalvm/setup-graalvm@v1
+        with:
+          distribution: graalvm-community
+          java-version: "25"
+          cache: gradle
+      # The same Liquibase and changelog as at the API's startup, so the API finds them applied.
+      # The session pooler's address: GitHub's runners have no IPv6 for the direct one.
+      - name: Apply the changesets
+        run: ./gradlew migrate
+        env:
+          LIQUIBASE_COMMAND_URL: ${{ secrets.SUPABASE_DB_URL }}
+          LIQUIBASE_COMMAND_USERNAME: ${{ secrets.SUPABASE_DB_USERNAME }}
+          LIQUIBASE_COMMAND_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          LIQUIBASE_ANALYTICS_ENABLED: "false"
+
+  auth:
+    name: Supabase Auth settings
+    needs: database
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Checkout the commit ci tested
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+      # Pushing an empty site address or callback would break every sign-in link.
+      - name: Check the production addresses
+        run: |
+          for name in SUPABASE_PROJECT_REF ARI_WEB_URL ARI_API_URL; do
+            if [ -z "${!name}" ]; then
+              echo "Set the $name variable of the production environment" >&2
+              exit 1
+            fi
+          done
+        env:
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          ARI_WEB_URL: ${{ vars.ARI_WEB_URL }}
+          ARI_API_URL: ${{ vars.ARI_API_URL }}
+      - name: Set up the Supabase CLI
+        uses: supabase/setup-cli@v1
+        with:
+          version: 2.122.0
+      # supabase/config.toml with its [remotes.production] block: Google, the site and callback
+      # addresses, 15-minute tokens, the password rules. `supabase config diff` previews it.
+      - name: Push Supabase Auth settings
+        run: supabase config push --project-ref "$SUPABASE_PROJECT_REF" --yes
+        env:
+          SUPABASE_PROJECT_REF: ${{ vars.SUPABASE_PROJECT_REF }}
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID: ${{ secrets.SUPABASE_AUTH_EXTERNAL_GOOGLE_CLIENT_ID }}
+          SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET: ${{ secrets.SUPABASE_AUTH_EXTERNAL_GOOGLE_SECRET }}
+          ARI_WEB_URL: ${{ vars.ARI_WEB_URL }}
+          ARI_GOOGLE_CALLBACK_URL: ${{ vars.ARI_API_URL }}/api/v1/auth/google/callback
